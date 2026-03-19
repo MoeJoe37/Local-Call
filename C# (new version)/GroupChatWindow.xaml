@@ -1,0 +1,190 @@
+<Window x:Class="LocalCallPro.GroupChatWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Group Chat – Local Call"
+        Height="680" Width="900"
+        MinHeight="480" MinWidth="580"
+        Background="#121212"
+        Foreground="#E0E0E0"
+        FontFamily="Segoe UI"
+        WindowStartupLocation="CenterScreen"
+        Closing="Window_Closing">
+
+    <Window.Resources>
+        <Style x:Key="IconBtn" TargetType="Button">
+            <Setter Property="Background"      Value="Transparent"/>
+            <Setter Property="Foreground"      Value="#AAAAAA"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor"          Value="Hand"/>
+            <Setter Property="FontSize"        Value="18"/>
+            <Setter Property="Padding"         Value="6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#2A2A2A"/>
+                                <Setter Property="Foreground" Value="#E0E0E0"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <DataTemplate x:Key="GrpMsgTemplate">
+            <Grid Margin="6,3">
+                <Border HorizontalAlignment="{Binding BubbleAlign}"
+                        Background="{Binding BubbleColor}"
+                        CornerRadius="10" Padding="10,8"
+                        MaxWidth="520" MinWidth="60">
+                    <StackPanel>
+                        <TextBlock Text="{Binding NameDisplay}"
+                                   FontSize="11" FontWeight="SemiBold"
+                                   Foreground="#BB86FC" Margin="0,0,0,3"
+                                   Visibility="{Binding NameVisibility}"/>
+                        <TextBlock Text="{Binding Text}" FontSize="14" Foreground="#E0E0E0"
+                                   TextWrapping="Wrap" Visibility="{Binding TextVisibility}"/>
+                        <Image Source="{Binding ImageSource}" MaxWidth="360" MaxHeight="280"
+                               Stretch="Uniform" Visibility="{Binding ImageVisibility}" Cursor="Hand">
+                            <Image.InputBindings>
+                                <MouseBinding MouseAction="LeftClick"
+                                              Command="{Binding ActionCommand}" CommandParameter="{Binding}"/>
+                            </Image.InputBindings>
+                        </Image>
+                        <StackPanel Orientation="Horizontal" Visibility="{Binding FileVisibility}">
+                            <TextBlock Text="📎" FontSize="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="{Binding FileName}" FontSize="13" Foreground="#E0E0E0"
+                                       VerticalAlignment="Center" MaxWidth="300" TextTrimming="CharacterEllipsis"/>
+                            <Button Content="⬇" Style="{StaticResource IconBtn}" FontSize="14"
+                                    Command="{Binding ActionCommand}" CommandParameter="{Binding}"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Visibility="{Binding VoiceVisibility}">
+                            <TextBlock Text="🎙" FontSize="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="Voice note" FontSize="13" Foreground="#E0E0E0" VerticalAlignment="Center"/>
+                            <Button Content="▶" Style="{StaticResource IconBtn}" FontSize="14"
+                                    Command="{Binding ActionCommand}" CommandParameter="{Binding}"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding TimeStr}" FontSize="10" Foreground="#666"
+                                   HorizontalAlignment="Right" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="180"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- ── Left: chat area ── -->
+        <Grid Grid.Column="0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Header -->
+            <Border Grid.Row="0" Background="#1A1A1A"
+                    BorderBrush="#2A2A2A" BorderThickness="0,0,0,1" Padding="16,10">
+                <Grid>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="👥" FontSize="18" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="TxtGroupName" FontSize="16" FontWeight="SemiBold"
+                                   Foreground="#E0E0E0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                        <Button x:Name="BtnGroupCall" Style="{StaticResource IconBtn}"
+                                Content="📞" ToolTip="Start group voice call" FontSize="20"
+                                Click="BtnGroupCall_Click"/>
+                        <Button x:Name="BtnGroupVideo" Style="{StaticResource IconBtn}"
+                                Content="📹" ToolTip="Start group video call" FontSize="20"
+                                Click="BtnGroupVideo_Click"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- Messages -->
+            <ScrollViewer x:Name="Scroller" Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto" Background="#121212">
+                <ItemsControl x:Name="MsgList"
+                              ItemTemplate="{StaticResource GrpMsgTemplate}"
+                              Padding="0,6"/>
+            </ScrollViewer>
+
+            <!-- Toolbar -->
+            <Border Grid.Row="2" Background="#181818"
+                    BorderBrush="#2A2A2A" BorderThickness="0,1,0,0" Padding="8,4">
+                <StackPanel Orientation="Horizontal">
+                    <Button Style="{StaticResource IconBtn}" Content="🖼" ToolTip="Send image/video"
+                            Click="BtnSendImage_Click"/>
+                    <Button Style="{StaticResource IconBtn}" Content="📂" ToolTip="Send file"
+                            Click="BtnSendFile_Click"/>
+                    <Button x:Name="BtnVoiceNote" Style="{StaticResource IconBtn}"
+                            Content="🎙" ToolTip="Hold to record voice note"
+                            PreviewMouseLeftButtonDown="BtnVoiceNote_MouseDown"
+                            PreviewMouseLeftButtonUp="BtnVoiceNote_MouseUp"/>
+                    <TextBlock x:Name="TxtRecording" Text="● Recording…"
+                               Foreground="#CF4444" FontSize="12" VerticalAlignment="Center"
+                               Margin="8,0,0,0" Visibility="Collapsed"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Input -->
+            <Border Grid.Row="3" Background="#1A1A1A"
+                    BorderBrush="#2A2A2A" BorderThickness="0,1,0,0" Padding="12,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Background="#252525"
+                            BorderBrush="#444" BorderThickness="1"
+                            CornerRadius="20" Padding="12,0" Margin="0,0,8,0">
+                        <TextBox x:Name="TxtInput"
+                                 Background="Transparent" BorderThickness="0"
+                                 Foreground="#E0E0E0" FontSize="14"
+                                 VerticalAlignment="Center" MinHeight="36"
+                                 VerticalContentAlignment="Center"
+                                 KeyDown="TxtInput_KeyDown"/>
+                    </Border>
+                    <Button Grid.Column="1" Content="➤" Width="42" Height="42"
+                            Background="#BB86FC" Foreground="White"
+                            BorderThickness="0" FontSize="18" Cursor="Hand"
+                            Click="BtnSend_Click">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="{TemplateBinding Background}" CornerRadius="21">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="#9965E8"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ── Right: members list ── -->
+        <Border Grid.Column="1" Background="#181818"
+                BorderBrush="#2A2A2A" BorderThickness="1,0,0,0">
+            <StackPanel>
+                <TextBlock Text="MEMBERS" FontSize="10" FontWeight="SemiBold"
+                           Foreground="#555" Margin="12,14,12,8"/>
+                <ListBox x:Name="MemberList" Background="Transparent"
+                         BorderThickness="0" FontSize="13"/>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

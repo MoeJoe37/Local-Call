@@ -1,0 +1,122 @@
+<Window x:Class="LocalCallPro.CallWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Call – Local Call"
+        Height="620" Width="920"
+        MinHeight="420" MinWidth="600"
+        Background="#0D0D0D"
+        Foreground="#E0E0E0"
+        FontFamily="Segoe UI"
+        WindowStartupLocation="CenterScreen"
+        Closing="Window_Closing">
+
+    <Window.Resources>
+        <Style x:Key="CallBtn" TargetType="Button">
+            <Setter Property="Background"      Value="#252525"/>
+            <Setter Property="Foreground"      Value="#E0E0E0"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor"          Value="Hand"/>
+            <Setter Property="FontSize"        Value="13"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#383838"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ActiveBtn" TargetType="Button" BasedOn="{StaticResource CallBtn}">
+            <Setter Property="Background" Value="#3D2B6B"/>
+            <Setter Property="Foreground" Value="#BB86FC"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Video area -->
+        <Grid Grid.Row="0" Background="#000">
+            <Image x:Name="RemoteVideo" Stretch="Uniform"/>
+            <!-- Self PiP -->
+            <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                    Margin="12" Width="200" Height="120"
+                    Background="#111" BorderBrush="#333" BorderThickness="1"
+                    CornerRadius="6" ClipToBounds="True">
+                <Image x:Name="LocalVideo" Stretch="UniformToFill"/>
+            </Border>
+            <!-- Overlay shown until connected -->
+            <StackPanel x:Name="ConnectingOverlay"
+                        HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock x:Name="TxtCallWith" FontSize="26" Foreground="#E0E0E0"
+                           HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                <TextBlock x:Name="TxtStatus" Text="Connecting…"
+                           FontSize="15" Foreground="#888" HorizontalAlignment="Center"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- Controls bar -->
+        <Border Grid.Row="1" Background="#1A1A1A" Padding="16,10">
+            <StackPanel>
+                <!-- Main controls row -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,8">
+
+                    <Button x:Name="BtnMute" Style="{StaticResource CallBtn}"
+                            Content="🎤 Mute" Width="100" Height="40" Margin="5,0"
+                            Padding="0" Click="BtnMute_Click"/>
+
+                    <Button x:Name="BtnCamera" Style="{StaticResource CallBtn}"
+                            Content="📷 Camera" Width="110" Height="40" Margin="5,0"
+                            Padding="0" Click="BtnCamera_Click"/>
+
+                    <Button x:Name="BtnScreen" Style="{StaticResource CallBtn}"
+                            Content="🖥 Screen" Width="110" Height="40" Margin="5,0"
+                            Padding="0" Click="BtnScreen_Click"/>
+
+                    <Button x:Name="BtnHangup"
+                            Content="🛑 End Call" Width="120" Height="40" Margin="5,0"
+                            Background="#CF4444" Foreground="White"
+                            BorderThickness="0" Cursor="Hand" Padding="0"
+                            Click="BtnHangup_Click">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="{TemplateBinding Background}" CornerRadius="6">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="#E05555"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </StackPanel>
+
+                <!-- Screen share audio option -->
+                <StackPanel x:Name="ScreenAudioPanel" Orientation="Horizontal"
+                            HorizontalAlignment="Center" Visibility="Collapsed">
+                    <CheckBox x:Name="ChkScreenAudio"
+                              Content="Include microphone audio while sharing screen"
+                              Foreground="#888" FontSize="11"
+                              IsChecked="True"
+                              Checked="ChkScreenAudio_Changed"
+                              Unchecked="ChkScreenAudio_Changed"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

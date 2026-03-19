@@ -1,0 +1,102 @@
+<Window x:Class="LocalCallPro.GroupManageDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Manage Group"
+        Height="520" Width="480"
+        Background="#1A1A2E"
+        Foreground="#E0E0E0"
+        FontFamily="Segoe UI"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResize"
+        ShowInTaskbar="False">
+
+    <Window.Resources>
+        <Style x:Key="ActionBtn" TargetType="Button">
+            <Setter Property="Background"       Value="#252535"/>
+            <Setter Property="Foreground"       Value="#AAAAAA"/>
+            <Setter Property="BorderThickness"  Value="0"/>
+            <Setter Property="Cursor"           Value="Hand"/>
+            <Setter Property="Padding"          Value="8,3"/>
+            <Setter Property="FontSize"         Value="11"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#32324A"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Group name header -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                <TextBlock Text="👥" FontSize="18" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                <TextBlock x:Name="TxtGroupTitle" FontSize="17" FontWeight="Bold"
+                           Foreground="#BB86FC" VerticalAlignment="Center"/>
+            </StackPanel>
+            <TextBlock x:Name="TxtOwnerNote" FontSize="11" Foreground="#555"/>
+        </StackPanel>
+
+        <!-- Members list -->
+        <Border Grid.Row="1" Background="#0C0C1A" BorderBrush="#2A2A4E"
+                BorderThickness="1" CornerRadius="6" ClipToBounds="True">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel x:Name="MemberRows" Margin="4"/>
+            </ScrollViewer>
+        </Border>
+
+        <!-- Add member button (owner only) -->
+        <Border Grid.Row="2" x:Name="AddMemberRow" Margin="0,8,0,0" Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="Add member:" Foreground="#666" FontSize="12"
+                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <ComboBox x:Name="CmbAddMember" Width="160" Background="#252535"
+                          Foreground="#E0E0E0" BorderBrush="#3A3A5E"/>
+                <Button Content="Add" Width="60" Height="28" Margin="8,0,0,0"
+                        Style="{StaticResource ActionBtn}"
+                        Foreground="#03DAC6" Click="BtnAddMember_Click"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Danger zone (owner only) -->
+        <StackPanel Grid.Row="3" x:Name="DangerRow"
+                    Orientation="Horizontal" HorizontalAlignment="Right"
+                    Margin="0,12,0,0" Visibility="Collapsed">
+            <Button Content="🗑 Delete Group" Height="30" Padding="14,0"
+                    Background="#2A1010" Foreground="#CF4444"
+                    BorderThickness="0" Cursor="Hand"
+                    Click="BtnDeleteGroup_Click">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#3A1515"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Button.Template>
+            </Button>
+        </StackPanel>
+    </Grid>
+</Window>

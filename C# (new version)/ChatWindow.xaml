@@ -1,0 +1,213 @@
+<Window x:Class="LocalCallPro.ChatWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Chat – Local Call"
+        Height="680" Width="820"
+        MinHeight="480" MinWidth="560"
+        Background="#121212"
+        Foreground="#E0E0E0"
+        FontFamily="Segoe UI"
+        WindowStartupLocation="CenterScreen"
+        Closing="Window_Closing">
+
+    <Window.Resources>
+        <!-- Base button -->
+        <Style x:Key="IconBtn" TargetType="Button">
+            <Setter Property="Background"      Value="Transparent"/>
+            <Setter Property="Foreground"      Value="#AAAAAA"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor"          Value="Hand"/>
+            <Setter Property="FontSize"        Value="18"/>
+            <Setter Property="Padding"         Value="6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#2A2A2A"/>
+                                <Setter Property="Foreground" Value="#E0E0E0"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Message bubble DataTemplate -->
+        <DataTemplate x:Key="MsgTemplate">
+            <Grid Margin="6,3">
+                <!-- Mine = right-align -->
+                <Border HorizontalAlignment="{Binding BubbleAlign}"
+                        Background="{Binding BubbleColor}"
+                        CornerRadius="10" Padding="10,8"
+                        MaxWidth="480" MinWidth="60">
+                    <StackPanel>
+                        <!-- Sender name (others only) -->
+                        <TextBlock Text="{Binding NameDisplay}"
+                                   FontSize="11" FontWeight="SemiBold"
+                                   Foreground="#BB86FC" Margin="0,0,0,3"
+                                   Visibility="{Binding NameVisibility}"/>
+
+                        <!-- TEXT -->
+                        <TextBlock Text="{Binding Text}"
+                                   FontSize="14" Foreground="#E0E0E0"
+                                   TextWrapping="Wrap"
+                                   Visibility="{Binding TextVisibility}"/>
+
+                        <!-- IMAGE -->
+                        <Image Source="{Binding ImageSource}"
+                               MaxWidth="340" MaxHeight="260"
+                               Stretch="Uniform"
+                               Visibility="{Binding ImageVisibility}"
+                               Cursor="Hand">
+                            <Image.InputBindings>
+                                <MouseBinding MouseAction="LeftClick"
+                                              Command="{Binding ActionCommand}"
+                                              CommandParameter="{Binding}"/>
+                            </Image.InputBindings>
+                        </Image>
+
+                        <!-- FILE / VOICE note -->
+                        <StackPanel Orientation="Horizontal"
+                                    Visibility="{Binding FileVisibility}">
+                            <TextBlock Text="📎" FontSize="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="{Binding FileName}" FontSize="13" Foreground="#E0E0E0"
+                                       VerticalAlignment="Center" MaxWidth="280"
+                                       TextTrimming="CharacterEllipsis"/>
+                            <Button Content="⬇" Style="{StaticResource IconBtn}" FontSize="14"
+                                    ToolTip="Save"
+                                    Command="{Binding ActionCommand}" CommandParameter="{Binding}"/>
+                        </StackPanel>
+
+                        <!-- Voice note -->
+                        <StackPanel Orientation="Horizontal"
+                                    Visibility="{Binding VoiceVisibility}">
+                            <TextBlock Text="🎙" FontSize="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="Voice note" FontSize="13" Foreground="#E0E0E0" VerticalAlignment="Center"/>
+                            <Button Content="▶" Style="{StaticResource IconBtn}" FontSize="14"
+                                    ToolTip="Play"
+                                    Command="{Binding ActionCommand}" CommandParameter="{Binding}"/>
+                        </StackPanel>
+
+                        <!-- Timestamp -->
+                        <TextBlock Text="{Binding TimeStr}"
+                                   FontSize="10" Foreground="#666"
+                                   HorizontalAlignment="Right" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>  <!-- header -->
+            <RowDefinition Height="*"/>     <!-- messages -->
+            <RowDefinition Height="Auto"/>  <!-- toolbar -->
+            <RowDefinition Height="Auto"/>  <!-- input bar -->
+        </Grid.RowDefinitions>
+
+        <!-- ── Header ── -->
+        <Border Grid.Row="0" Background="#1A1A1A"
+                BorderBrush="#2A2A2A" BorderThickness="0,0,0,1" Padding="16,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="StatusDot" Width="10" Height="10" Margin="0,0,10,0"/>
+                    <TextBlock x:Name="TxtPeerName" FontSize="16" FontWeight="SemiBold"
+                               Foreground="#E0E0E0" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <!-- Call buttons -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Button x:Name="BtnVoiceCall" Style="{StaticResource IconBtn}"
+                            Content="📞" ToolTip="Voice call" FontSize="20"
+                            Click="BtnVoiceCall_Click"/>
+                    <Button x:Name="BtnVideoCall" Style="{StaticResource IconBtn}"
+                            Content="📹" ToolTip="Video call" FontSize="20"
+                            Click="BtnVideoCall_Click"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ── Messages ── -->
+        <ScrollViewer x:Name="Scroller" Grid.Row="1"
+                      VerticalScrollBarVisibility="Auto"
+                      Background="#121212">
+            <ItemsControl x:Name="MsgList"
+                          ItemTemplate="{StaticResource MsgTemplate}"
+                          Padding="0,6"/>
+        </ScrollViewer>
+
+        <!-- ── Toolbar: attach / voice ── -->
+        <Border Grid.Row="2" Background="#181818"
+                BorderBrush="#2A2A2A" BorderThickness="0,1,0,0" Padding="8,4">
+            <StackPanel Orientation="Horizontal">
+                <Button Style="{StaticResource IconBtn}" Content="🖼" ToolTip="Send image/video"
+                        Click="BtnSendImage_Click"/>
+                <Button Style="{StaticResource IconBtn}" Content="📂" ToolTip="Send file"
+                        Click="BtnSendFile_Click"/>
+                <Button x:Name="BtnVoiceNote" Style="{StaticResource IconBtn}"
+                        Content="🎙" ToolTip="Hold to record voice note"
+                        PreviewMouseLeftButtonDown="BtnVoiceNote_MouseDown"
+                        PreviewMouseLeftButtonUp="BtnVoiceNote_MouseUp"/>
+                <TextBlock x:Name="TxtRecording" Text="● Recording…"
+                           Foreground="#CF4444" FontSize="12" VerticalAlignment="Center"
+                           Margin="8,0,0,0" Visibility="Collapsed"/>
+            </StackPanel>
+        </Border>
+
+        <!-- ── Input bar ── -->
+        <Border Grid.Row="3" Background="#1A1A1A"
+                BorderBrush="#2A2A2A" BorderThickness="0,1,0,0" Padding="12,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Background="#252525"
+                        BorderBrush="#444" BorderThickness="1"
+                        CornerRadius="20" Padding="12,0" Margin="0,0,8,0">
+                    <TextBox x:Name="TxtInput"
+                             Background="Transparent" BorderThickness="0"
+                             Foreground="#E0E0E0" FontSize="14"
+                             VerticalAlignment="Center" MinHeight="36"
+                             AcceptsReturn="False"
+                             KeyDown="TxtInput_KeyDown"
+                             VerticalContentAlignment="Center"/>
+                </Border>
+
+                <Button Grid.Column="1" Content="➤"
+                        Width="42" Height="42"
+                        Background="#BB86FC" Foreground="White"
+                        BorderThickness="0" FontSize="18"
+                        Cursor="Hand"
+                        Click="BtnSend_Click">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}"
+                                    CornerRadius="21">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="#9965E8"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
