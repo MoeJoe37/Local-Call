@@ -83,7 +83,7 @@ C#:      byte[0]   – end-of-frame flag (0 or 1)
 ## Project structure
 
 ```
-LocalCallPro/
+LocalCall/
 ├── LocalCall.csproj   – project + NuGet references
 ├── App.xaml / .cs        – WPF application entry point
 ├── MainWindow.xaml / .cs – main UI (lobby + call room)
