@@ -84,7 +84,7 @@ C#:      byte[0]   – end-of-frame flag (0 or 1)
 
 ```
 LocalCallPro/
-├── LocalCallPro.csproj   – project + NuGet references
+├── LocalCall.csproj   – project + NuGet references
 ├── App.xaml / .cs        – WPF application entry point
 ├── MainWindow.xaml / .cs – main UI (lobby + call room)
 ├── InputDialog.xaml / .cs– name-edit dialog (replaces QInputDialog)
