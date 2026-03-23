@@ -1,4 +1,4 @@
-# Local Call Pro  —  C# / WPF Port
+# Local Call  —  C# / WPF Port
 
 A LAN peer-to-peer calling application that mirrors the original Python / PyQt6 app.
 
@@ -14,7 +14,7 @@ A LAN peer-to-peer calling application that mirrors the original Python / PyQt6 
 | Mute / unmute | ✅ |
 | Funny display names | ✅ |
 | Edit profile name | ✅ |
-| Chat / file transfer | 🚧 Coming soon |
+| Chat / file transfer | ✅ |
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ A LAN peer-to-peer calling application that mirrors the original Python / PyQt6 
 
 ```bash
 # 1. Restore NuGet packages & build
-cd LocalCallPro
+cd LocalCall
 dotnet restore
 dotnet build -c Release
 
@@ -83,8 +83,8 @@ C#:      byte[0]   – end-of-frame flag (0 or 1)
 ## Project structure
 
 ```
-LocalCallPro/
-├── LocalCallPro.csproj   – project + NuGet references
+LocalCall/
+├── LocalCall.csproj   – project + NuGet references
 ├── App.xaml / .cs        – WPF application entry point
 ├── MainWindow.xaml / .cs – main UI (lobby + call room)
 ├── InputDialog.xaml / .cs– name-edit dialog (replaces QInputDialog)
