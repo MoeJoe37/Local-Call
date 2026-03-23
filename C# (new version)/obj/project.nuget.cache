@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "o4eRIV6QqGs=",
+  "dgSpecHash": "qLpQsLMUp5A=",
   "success": true,
-  "projectFilePath": "C:\\Users\\MoeJoe\\Downloads\\LocalCallPro\\LocalCallPro.csproj",
+  "projectFilePath": "C:\\Users\\MoeJoe\\Downloads\\LocalCall\\LocalCallPro.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\MoeJoe\\.nuget\\packages\\microsoft.netcore.platforms\\3.1.0\\microsoft.netcore.platforms.3.1.0.nupkg.sha512",
     "C:\\Users\\MoeJoe\\.nuget\\packages\\microsoft.win32.registry\\4.7.0\\microsoft.win32.registry.4.7.0.nupkg.sha512",

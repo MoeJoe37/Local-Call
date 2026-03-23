@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\MoeJoe\\Downloads\\LocalCallPro\\LocalCallPro.csproj": {}
+    "C:\\Users\\MoeJoe\\Downloads\\LocalCall\\LocalCallPro.csproj": {}
   },
   "projects": {
-    "C:\\Users\\MoeJoe\\Downloads\\LocalCallPro\\LocalCallPro.csproj": {
+    "C:\\Users\\MoeJoe\\Downloads\\LocalCall\\LocalCallPro.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\MoeJoe\\Downloads\\LocalCallPro\\LocalCallPro.csproj",
+        "projectUniqueName": "C:\\Users\\MoeJoe\\Downloads\\LocalCall\\LocalCallPro.csproj",
         "projectName": "LocalCall",
-        "projectPath": "C:\\Users\\MoeJoe\\Downloads\\LocalCallPro\\LocalCallPro.csproj",
+        "projectPath": "C:\\Users\\MoeJoe\\Downloads\\LocalCall\\LocalCallPro.csproj",
         "packagesPath": "C:\\Users\\MoeJoe\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\MoeJoe\\Downloads\\LocalCallPro\\obj\\",
+        "outputPath": "C:\\Users\\MoeJoe\\Downloads\\LocalCall\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\MoeJoe\\AppData\\Roaming\\NuGet\\NuGet.Config"

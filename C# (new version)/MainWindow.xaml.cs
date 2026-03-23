@@ -645,7 +645,7 @@ public partial class MainWindow : Window
             // Someone else was kicked — update local group state
             var g = _friendMgr.Groups.FirstOrDefault(x => x.GroupId == msg.GroupId);
             if (g == null) return;
-            g.MemberIds.Remove(msg.TargetId);
+            if (msg.TargetId != null) g.MemberIds.Remove(msg.TargetId);
             g.Members.RemoveAll(m => m.Id == msg.TargetId);
             if (_activeGroup?.GroupId == msg.GroupId)
                 GrpMemberList.ItemsSource = g.Members.Select(m => $"● {m.Name}").ToList();
