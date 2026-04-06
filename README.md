@@ -1,96 +1,155 @@
-# Local Call  —  C# / WPF Port
+# Local Call Pro — C++ Port
 
-A LAN peer-to-peer calling application that mirrors the original Python / PyQt6 app.
+A complete C++ rewrite of the C# / WPF **Local Call Pro** LAN communication app.
+The UI, protocol, and all features are preserved 1:1. Built with **Qt 6** (replaces WPF)
+and **OpenCV** (replaces OpenCvSharp).
+
+---
 
 ## Features
 
-| Feature | Status |
-|---|---|
-| LAN peer discovery (UDP broadcast) | ✅ |
-| Voice call (microphone → speaker) | ✅ |
-| Video call (webcam) | ✅ |
-| Screen sharing | ✅ |
-| Adjustable resolution & FPS | ✅ |
-| Mute / unmute | ✅ |
-| Funny display names | ✅ |
-| Edit profile name | ✅ |
-| Chat / file transfer | ✅ |
+- 🔍 **LAN peer discovery** — UDP broadcast + multicast + TCP subnet scan
+- 👥 **Friend management** — requests, accept/decline, remove, block
+- 💬 **1-to-1 chat** — text, images, files (≤50 MB), voice notes
+- 🏘 **Group chat** — create groups, send messages/files/voice, manage members
+- 📞 **Voice & video calls** — UDP audio/video streaming via OpenCV
+- 🖥 **Screen sharing** — live desktop capture during a video call
+- 🔔 **Toast notifications** — incoming calls, friend requests, messages
+- 🌑 **Dark theme** — matching the original Catppuccin-dark colour scheme
+- 💾 **Persistent history** — chat logs stored to `%AppData%/Local Call/`
+- 🛡 **Group permissions** — owner/helper roles, per-member send/file/call flags
+- 🔒 **Firewall helper** — auto-adds Windows Firewall rules (UAC once)
 
-## Prerequisites
+---
 
-| Requirement | Notes |
-|---|---|
-| **.NET 8 SDK** | https://dotnet.microsoft.com/download |
-| **Windows 10 / 11** | WPF is Windows-only |
-| **Webcam** | Optional – needed for video calls |
-| **Microphone + speakers** | Optional – needed for voice |
+## Dependencies
 
-## Quick Start
+| Library | Version | Purpose |
+|---------|---------|---------|
+| Qt 6    | ≥ 6.5   | UI, networking, audio |
+| OpenCV  | ≥ 4.8   | Camera capture, video encode/decode |
+| [nlohmann/json](https://github.com/nlohmann/json) | ≥ 3.11 | JSON serialisation |
+
+---
+
+## Build
+
+### Prerequisites (Windows)
+
+```powershell
+# Install Qt 6 (e.g. via Qt Online Installer → Qt 6.6 MSVC 2022)
+# Install OpenCV (e.g. via vcpkg: vcpkg install opencv4)
+# Install CMake ≥ 3.20
+```
+
+### CMake build
+
+```powershell
+git clone <this-repo>
+cd LocalCallPro_CPP
+
+# nlohmann/json is auto-downloaded by CMake on first configure,
+# OR manually place json.hpp in:  third_party/nlohmann/json.hpp
+
+cmake -B build -G "Visual Studio 17 2022" -A x64 \
+      -DCMAKE_PREFIX_PATH="C:/Qt/6.6.0/msvc2022_64;C:/vcpkg/installed/x64-windows"
+cmake --build build --config Release
+```
+
+The binary lands at `build/Release/LocalCallPro.exe`.
+
+### Linux / macOS
 
 ```bash
-# 1. Restore NuGet packages & build
-cd LocalCall
-dotnet restore
-dotnet build -c Release
-
-# 2. Run
-dotnet run
+sudo apt install qt6-base-dev qt6-multimedia-dev libopencv-dev   # Ubuntu 24
+cmake -B build && cmake --build build -j$(nproc)
 ```
 
-The app auto-discovers other instances on the same LAN within ~2 seconds.
+> **Note:** Firewall helper is Windows-only; on Linux the ports just need to be open.
 
-## How to make a call
+---
 
-1. Launch the app on two machines on the same Wi-Fi / LAN.
-2. Each machine will appear in the other's **Online Peers** list.
-3. Click a peer → choose **Voice / Video Call** or **Share Screen**.
-4. Adjust **Quality** and **FPS** sliders during the call.
-5. Click **🛑 End Call** to hang up.
-
-## Network ports used
-
-| Port | Purpose |
-|---|---|
-| **50005** UDP | Peer discovery broadcast |
-| **50100** UDP | Video stream (send & receive) |
-| **50105** UDP | Audio stream (send & receive) |
-
-> Make sure your firewall allows these UDP ports (both inbound and outbound).
-
-## Compatibility with Python version
-
-The C# app is wire-compatible with the original Python app.
-Both sides use the same frame-header format:
+## Project Structure
 
 ```
-Python:  struct.pack("?I", is_last_chunk, chunk_size)
-         = 8 bytes  (1 bool + 3-byte pad + 4-byte uint, native alignment on x86/x64)
-
-C#:      byte[0]   – end-of-frame flag (0 or 1)
-         byte[1-3] – alignment padding (always 0)
-         byte[4-7] – chunk payload length as uint32 little-endian
-         byte[8..] – JPEG chunk payload
+LocalCallPro_CPP/
+├── CMakeLists.txt
+├── include/
+│   ├── MediaSettings.h       # Port constants, video presets
+│   ├── SigMsg.h              # Signaling protocol + JSON helpers
+│   ├── PeerInfo.h            # Peer discovery record
+│   ├── FriendInfo.h          # Friend + PendingRequest data
+│   ├── GroupInfo.h           # Group + permissions data
+│   ├── ChatMessage.h         # Chat message model + StoredMessage
+│   ├── Helpers.h             # Base64, MIME, IP, random names
+│   ├── PeerDiscovery.h       # LAN discovery (UDP + TCP scan)
+│   ├── SignalingServer.h     # TCP server
+│   ├── SignalingClient.h     # TCP client (fire-and-forget + reliable)
+│   ├── FriendManager.h       # Friends/groups/pending persistence
+│   ├── ChatStore.h           # Per-conversation history
+│   ├── VoiceNoteRecorder.h   # Hold-to-record audio → WAV
+│   ├── MediaWorker.h         # UDP audio/video streaming
+│   ├── FirewallHelper.h      # Windows Firewall rules
+│   ├── NotificationWindow.h  # Toast / action popup
+│   ├── InputDialog.h         # Single-field input dialog
+│   ├── CallWindow.h          # Voice/video call window
+│   ├── GroupCreateDialog.h   # New group dialog
+│   ├── GroupManageDialog.h   # Group admin panel
+│   └── MainWindow.h          # Main app window
+├── src/
+│   ├── main.cpp
+│   ├── Helpers.cpp
+│   ├── PeerDiscovery.cpp
+│   ├── SignalingServer.cpp
+│   ├── SignalingClient.cpp
+│   ├── FriendManager.cpp
+│   ├── ChatStore.cpp
+│   ├── VoiceNoteRecorder.cpp
+│   ├── MediaWorker.cpp
+│   ├── FirewallHelper.cpp
+│   ├── NotificationWindow.cpp
+│   ├── InputDialog.cpp
+│   ├── CallWindow.cpp
+│   ├── GroupCreateDialog.cpp
+│   ├── GroupManageDialog.cpp
+│   ├── MainWindow.cpp          # UI construction
+│   └── MainWindow_logic.cpp    # All signal handlers + chat logic
+└── third_party/
+    └── nlohmann/
+        └── json.hpp            # (auto-downloaded by CMake)
 ```
 
-## NuGet packages
+---
 
-| Package | Version | Purpose |
-|---|---|---|
-| NAudio | 2.2.1 | Audio capture / playback |
-| OpenCvSharp4 | 4.9.0.20240103 | Camera capture, JPEG encode/decode |
-| OpenCvSharp4.runtime.win | 4.9.0.20240103 | Windows native OpenCV binaries |
+## C# → C++ Mapping
 
-## Project structure
+| C# (WPF)              | C++ (Qt)                          |
+|-----------------------|-----------------------------------|
+| `ObservableCollection`| `QList` + manual `rebuild*()`     |
+| `INotifyPropertyChanged` | `QObject` + signals          |
+| `Dispatcher.InvokeAsync` | `QMetaObject::invokeMethod` / direct (already on main thread via signal) |
+| `Task.Run`            | `QtConcurrent::run` / `QThread`   |
+| `BitmapSource`        | `QImage` / `QPixmap`              |
+| `WaveInEvent`         | `QAudioSource`                    |
+| `WaveOutEvent`        | `QAudioSink`                      |
+| `JsonSerializer`      | `nlohmann::json`                  |
+| `DataTemplate`        | `QListWidgetItem` + `setItemWidget` |
+| `DataBinding`         | Manual `rebuild*()` helpers       |
+| `OpenCvSharp`         | `opencv2/opencv.hpp`              |
+| `NAudio`              | Qt Multimedia                     |
+
+---
+
+## Network Protocol
+
+All messages are **length-prefixed JSON** over TCP (port 50010):
 
 ```
-LocalCall/
-├── LocalCall.csproj   – project + NuGet references
-├── App.xaml / .cs        – WPF application entry point
-├── MainWindow.xaml / .cs – main UI (lobby + call room)
-├── InputDialog.xaml / .cs– name-edit dialog (replaces QInputDialog)
-├── Helpers.cs            – GetFunnyName, GetLocalIp
-├── MediaSettings.cs      – port constants, resolution / FPS tables
-├── PeerInfo.cs           – peer data model
-├── PeerDiscovery.cs      – UDP broadcast peer discovery
-└── MediaWorker.cs        – audio + video send / receive workers
+[4 bytes big-endian length][JSON body]
 ```
+
+Peer discovery uses **UDP broadcast** (port 50005) + **multicast 239.255.42.99**
++ **TCP /24 subnet scan** as fallback.
+
+Audio/video streams are **raw UDP** (ports 50100 / 50105). Video frames are
+JPEG-encoded and chunked at 60 KB with an 8-byte header.
