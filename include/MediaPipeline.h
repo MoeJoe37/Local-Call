@@ -4,6 +4,7 @@
 #include <QSize>
 #include <QMutex>
 #include <QThread>
+#include <QImage>
 #include <memory>
 
 #include <wels/codec_api.h>
@@ -13,6 +14,7 @@ class QCamera;
 class QMediaCaptureSession;
 class QVideoSink;
 class QVideoFrame;
+class QImage;
 class QAudioSource;
 class QAudioSink;
 class QIODevice;
@@ -60,6 +62,9 @@ public:
     void shutdown();
     void setOutputSink(QVideoSink* sink);
 
+signals:
+    void decodedImage(QImage image);
+
 public slots:
     void decodeNalu(QByteArray data);
 
@@ -91,6 +96,7 @@ public slots:
 signals:
     void encodedVideoFrame(QByteArray h264AnnexB);
     void encodedAudioFrame(QByteArray opusPacket);
+    void remoteVideoImage(QImage image);
 
 private slots:
     void onVideoFrame(const QVideoFrame& frame);
@@ -125,6 +131,6 @@ private:
     mutable QMutex         m_audioEncMutex;
     mutable QMutex         m_audioDecMutex;
 
-    static constexpr int OPUS_FRAME_SAMPLES = 960;
+    static constexpr int OPUS_FRAME_SAMPLES = 480;  // 10 ms at 48 kHz for lower latency
     QByteArray             m_audioCaptureBuffer;
 };

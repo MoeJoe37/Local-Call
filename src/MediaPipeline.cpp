@@ -10,6 +10,7 @@
 #include <QAudioDevice>
 #include <QMediaDevices>
 #include <QImage>
+#include <QDateTime>
 #include <QMutexLocker>
 #include <cstring>
 
@@ -259,28 +260,18 @@ void VideoDecoderWorker::decodeNalu(QByteArray data)
 
     if (w <= 0 || h <= 0 || !pData[0] || !pData[1] || !pData[2]) return;
 
-    QMutexLocker lk(&m_sinkMutex);
-    if (!m_sink) return;
+    QImage image(w, h, QImage::Format_ARGB32);
+    libyuv::I420ToARGB(pData[0], strideY,
+                       pData[1], strideU,
+                       pData[2], strideU,
+                       image.bits(), image.bytesPerLine(),
+                       w, h);
 
-    QVideoFrameFormat fmt(QSize(w, h), QVideoFrameFormat::Format_YUV420P);
-    QVideoFrame frame(fmt);
+    emit decodedImage(image.copy());
 
-    if (!frame.map(QVideoFrame::WriteOnly)) return;
-
-    uint8_t* dstY = frame.bits(0);
-    uint8_t* dstU = frame.bits(1);
-    uint8_t* dstV = frame.bits(2);
-
-    libyuv::I420Copy(pData[0], strideY,
-                     pData[1], strideU,
-                     pData[2], strideU,
-                     dstY, frame.bytesPerLine(0),
-                     dstU, frame.bytesPerLine(1),
-                     dstV, frame.bytesPerLine(2),
-                     w, h);
-    frame.unmap();
-
-    m_sink->setVideoFrame(frame);
+    // The QLabel-based call UI consumes decoded QImage frames directly.
+    // QVideoSink support is kept as a no-op extension point to avoid forcing
+    // a second conversion path on latency-sensitive builds.
 }
 
 MediaPipeline::MediaPipeline(const EncoderSettings& settings, QObject* parent)
@@ -312,31 +303,26 @@ bool MediaPipeline::startCapture()
     connect(m_encoderThread, &QThread::started,
             m_videoEncoder,  [this]{ m_videoEncoder->init(); });
     connect(m_decoderThread, &QThread::started,
-            m_videoDecoder,  [this]{
-                m_videoDecoder->init();
-                QMutexLocker lk(&m_audioDecMutex);
-                m_videoDecoder->setOutputSink(m_videoDecoder ? nullptr : nullptr);
-            });
+            m_videoDecoder,  [this]{ m_videoDecoder->init(); });
 
     connect(m_videoEncoder, &VideoEncoderWorker::encodedNalu,
             this,           &MediaPipeline::encodedVideoFrame,
             Qt::QueuedConnection);
+    connect(m_videoDecoder, &VideoDecoderWorker::decodedImage,
+            this,           &MediaPipeline::remoteVideoImage,
+            Qt::QueuedConnection);
 
     m_encoderThread->start();
     m_decoderThread->start();
-
-    if (m_localSink) {
-        m_videoDecoder->setOutputSink(nullptr);
-    }
 
     m_camera = new QCamera(QMediaDevices::defaultVideoInput(), this);
     m_captureSession = new QMediaCaptureSession(this);
     m_captureSession->setCamera(m_camera);
     m_captureSession->setVideoSink(m_captureSink);
 
-    if (m_localSink)
-        m_captureSession->setVideoSink(m_localSink);
-
+    // Keep the capture sink attached so every frame reaches the encoder.
+    // Local preview is intentionally sacrificed here to keep the capture path
+    // single-sink and low-latency across Qt backends.
     m_camera->start();
 
     if (!initAudioEncoder()) return false;
@@ -407,7 +393,9 @@ bool MediaPipeline::initAudioEncoder()
     if (err != OPUS_OK || !m_opusEnc) return false;
 
     opus_encoder_ctl(m_opusEnc, OPUS_SET_BITRATE(m_settings.opusBitrate));
-    opus_encoder_ctl(m_opusEnc, OPUS_SET_COMPLEXITY(5));
+    opus_encoder_ctl(m_opusEnc, OPUS_SET_COMPLEXITY(3));
+    opus_encoder_ctl(m_opusEnc, OPUS_SET_DTX(0));
+    opus_encoder_ctl(m_opusEnc, OPUS_SET_INBAND_FEC(0));
     opus_encoder_ctl(m_opusEnc, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
 
     int decErr = 0;

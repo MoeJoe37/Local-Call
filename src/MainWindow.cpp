@@ -238,6 +238,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     }
     m_localIp = QString::fromStdString(Helpers::getLocalIp());
 
+    m_security = new SecurityManager(this);
+    if (!m_security->loadOrCreate()) {
+        QMessageBox::warning(this, "Security",
+            "Could not create the local Ed25519 identity. Secure calls will be disabled for this session.");
+    }
+
     setWindowTitle("Local Call");
     setMinimumSize(900, 580);
     resize(1100, 680);

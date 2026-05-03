@@ -347,8 +347,8 @@ void MainWindow::rebuildPeersList()
             btnAdd->setText("✓");
 
             SigMsg sig = buildSig(SigType::FriendReq);
-            SignalingClient::sendReliable(ip, sig);
-            m_statusLabel->setText("Friend request sent to " + name + "…");
+            sendDirectSignal(ip, sig, true);
+            m_statusLabel->setText("Signed friend request sent to " + name + "…");
         });
     }
 
@@ -433,8 +433,8 @@ void MainWindow::onAddPeerByIp()
                 }
                 m_sentReqIds.insert(peerId);
                 SigMsg req = buildSig(SigType::FriendReq);
-                SignalingClient::sendReliable(ip, req);
-                m_statusLabel->setText("Friend request sent to " + peerName + " (" + ip + ")");
+                sendDirectSignal(ip, req, true);
+                m_statusLabel->setText("Signed friend request sent to " + peerName + " (" + ip + ")");
             }, Qt::QueuedConnection);
         } catch (...) {
             QMetaObject::invokeMethod(this, [this](){
@@ -453,6 +453,15 @@ void MainWindow::onSignalReceived(SigMsg msg, QString ip)
 {
     // Dispatch on UI thread
     const std::string& t = msg.type;
+
+    if ((t == SigType::FriendReq || t == SigType::FriendAcc ||
+         t == SigType::CallInv || t == SigType::CallAcc || t == SigType::CallRej || t == SigType::CallEnd ||
+         t == SigType::RtcOffer || t == SigType::RtcAnswer || t == SigType::RtcIce) &&
+        !verifyCriticalSignal(msg)) {
+        showToast("Blocked unauthenticated signal",
+                  QString::fromStdString(msg.from_name.empty() ? msg.from_id : msg.from_name));
+        return;
+    }
 
     // ── Block guard: silently drop chat and call traffic from users we've
     //    unfriended. Friendship-management signals (FriendReq, FriendDel, etc.)
@@ -476,7 +485,7 @@ void MainWindow::onSignalReceived(SigMsg msg, QString ip)
         showToast("Declined", QString::fromStdString(msg.from_name) + " declined the call.");
     }
     else if (t == SigType::CallEnd)    {
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
         if (m_callWin) { m_callWin->doClose(); m_callWin = nullptr; }
 #endif
     }
@@ -484,7 +493,7 @@ void MainWindow::onSignalReceived(SigMsg msg, QString ip)
     // teardown (ScreenEnd). C# version sends these; we accept gracefully.
     else if (t == SigType::ScreenInv)  handleCallInv(msg, ip);
     else if (t == SigType::ScreenEnd)  {
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
         if (m_callWin) { m_callWin->doClose(); m_callWin = nullptr; }
 #endif
     }
@@ -503,9 +512,12 @@ void MainWindow::onSignalReceived(SigMsg msg, QString ip)
     else if (t == SigType::GrpCallAcc) handleCallAcc(msg);
     else if (t == SigType::GrpCallRej) showToast("Declined", QString::fromStdString(msg.from_name) + " declined the group call.");
     else if (t == SigType::GrpCallEnd) {
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
         if (m_callWin) { m_callWin->doClose(); m_callWin = nullptr; }
 #endif
+    }
+    else if (t == SigType::RtcOffer || t == SigType::RtcAnswer || t == SigType::RtcIce) {
+        handleRtcSignal(msg, ip);
     }
     // ── Typing / uploading indicators ────────────────────────────────────────
     else if (t == SigType::Typing) {
@@ -548,7 +560,7 @@ void MainWindow::handleFriendReq(const SigMsg& msg, const QString& ip)
     // Already a friend — they may have missed our FriendAcc; resend silently
     if (m_friendMgr->hasFriend(fromId)) {
         SigMsg acc = buildSig(SigType::FriendAcc);
-        SignalingClient::send(ip, acc);
+        sendDirectSignal(ip, acc, true);
         return;
     }
 
@@ -560,6 +572,8 @@ void MainWindow::handleFriendReq(const SigMsg& msg, const QString& ip)
     req.fromId   = msg.from_id;
     req.fromName = msg.from_name;
     req.fromIp   = ip.toStdString();
+    if (msg.auth_public_key)  req.authPublicKey = *msg.auth_public_key;
+    if (msg.auth_fingerprint) req.authFingerprint = *msg.auth_fingerprint;
     m_friendMgr->addPending(req);
     rebuildRequestsList();
     refreshRequestsBadge();
@@ -579,6 +593,8 @@ void MainWindow::handleFriendAcc(const SigMsg& msg, const QString& ip)
     f.id   = msg.from_id;
     f.name = msg.from_name;
     f.ip   = ip.toStdString();
+    if (msg.auth_public_key)  f.authPublicKey = *msg.auth_public_key;
+    if (msg.auth_fingerprint) f.authFingerprint = *msg.auth_fingerprint;
     commitAddFriend(f);
     showToast("Friend added! 🎉", QString::fromStdString(msg.from_name) + " accepted your request.");
 }
@@ -713,11 +729,11 @@ void MainWindow::handleCallInv(const SigMsg& msg, const QString& ip)
         QString("%1 is calling (%2).").arg(name, mode),
         {
             {"Answer", [this, ip, name, mode, accMsg]() mutable {
-                SignalingClient::send(ip, accMsg);
-                openCallWindow(ip, name, mode == "video" ? CallMode::VideoCamera : CallMode::Voice);
+                sendDirectSignal(ip, accMsg, true);
+                openCallWindow(ip, name, mode == "video" ? CallMode::VideoCamera : CallMode::Voice, false);
             }},
-            {"Decline", [ip, rejMsg]() mutable {
-                SignalingClient::send(ip, rejMsg);
+            {"Decline", [this, ip, rejMsg]() mutable {
+                sendDirectSignal(ip, rejMsg, false);
             }}
         }
     );
@@ -732,21 +748,37 @@ void MainWindow::handleCallAcc(const SigMsg& msg)
     FriendInfo* f = m_friendMgr->getFriend(QString::fromStdString(msg.from_id));
     if (!f) return;
     openCallWindow(QString::fromStdString(f->ip), QString::fromStdString(f->name),
-                   m_pendingCallMode == "video" ? CallMode::VideoCamera : CallMode::Voice);
+                   m_pendingCallMode == "video" ? CallMode::VideoCamera : CallMode::Voice, true);
 }
 
-void MainWindow::openCallWindow(const QString& ip, const QString& name, CallMode mode)
+void MainWindow::handleRtcSignal(const SigMsg& msg, const QString& ip)
 {
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+    if (!m_callWin) {
+        FriendInfo* f = m_friendMgr->getFriend(QString::fromStdString(msg.from_id));
+        if (f) openCallWindow(ip, QString::fromStdString(f->name), CallMode::VideoCamera, false);
+    }
+    if (m_callWin) m_callWin->handleRtcSignal(msg);
+#else
+    Q_UNUSED(msg); Q_UNUSED(ip);
+#endif
+}
+
+void MainWindow::openCallWindow(const QString& ip, const QString& name, CallMode mode, bool initiator)
+{
+#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
     if (m_callWin) return;
-    m_callWin = new CallWindow(ip, name, mode, m_myId, m_myName, this);
+    m_callWin = new CallWindow(ip, name, mode, m_myId, m_myName, initiator, this);
+    connect(m_callWin, &CallWindow::rtcSignalReady, this, [this, ip](SigMsg msg) {
+        sendDirectSignal(ip, msg, true);
+    });
     connect(m_callWin, &CallWindow::hangupRequested, this, [this, ip]() {
         FriendInfo* f = nullptr;
         for (auto& fi : m_friendMgr->friends())
             if (fi.ip == ip.toStdString()) { f = &fi; break; }
         if (f) {
             SigMsg sig = buildSig(SigType::CallEnd);
-            SignalingClient::send(ip, sig);
+            sendDirectSignal(ip, sig, true);
         }
         m_callWin = nullptr;
     });
@@ -773,7 +805,7 @@ void MainWindow::sendCallInvite(FriendInfo* f, const QString& mode)
     QString peerIp   = QString::fromStdString(f->ip);
     QString peerName = QString::fromStdString(f->name);
 
-    SignalingClient::send(peerIp, sig);
+    sendDirectSignal(peerIp, sig, true);
 
     // Show a persistent "Calling…" panel for the CALLER only — NOT the
     // Answer/Decline notification that belongs on the receiver's side.
@@ -787,7 +819,7 @@ void MainWindow::sendCallInvite(FriendInfo* f, const QString& mode)
         QString("Calling %1…\nWaiting for them to answer.").arg(peerName),
         {
             {"Cancel", [this, peerIp, cancelMsg]() mutable {
-                SignalingClient::send(peerIp, cancelMsg);
+                sendDirectSignal(peerIp, cancelMsg, false);
                 m_pendingCallMode.clear();
             }}
         },
@@ -1328,7 +1360,7 @@ void MainWindow::sendFile(bool isGroup, bool imagesOnly)
 
         sendChunked([&](SigMsg sig){
             sig.type = SigType::ChatFile;
-            SignalingClient::send(peerIp, sig);
+            sendDirectSignal(peerIp, sig, true);
             // Update progress bar
             if (m_chatUploadBar && totalChunks > 0) {
                 int pct = (int)(((sig.chunk_index.value_or(0) + 1) * 100LL) / totalChunks);
@@ -1361,15 +1393,22 @@ void MainWindow::onAcceptRequest()
     QString fromName = item->data(Qt::UserRole + 1).toString();
     QString fromIp   = item->data(Qt::UserRole + 2).toString();
 
-    m_friendMgr->removePending(fromId);
     FriendInfo f;
     f.id   = fromId.toStdString();
     f.name = fromName.toStdString();
     f.ip   = fromIp.toStdString();
+    for (const auto& req : m_friendMgr->pending()) {
+        if (req.fromId == fromId.toStdString()) {
+            f.authPublicKey = req.authPublicKey;
+            f.authFingerprint = req.authFingerprint;
+            break;
+        }
+    }
+    m_friendMgr->removePending(fromId);
     commitAddFriend(f);
 
     SigMsg sig = buildSig(SigType::FriendAcc);
-    SignalingClient::sendReliable(fromIp, sig);
+    sendDirectSignal(fromIp, sig, true);
     rebuildRequestsList();
     refreshRequestsBadge();
 }
@@ -1385,7 +1424,7 @@ void MainWindow::onDeclineRequest()
     m_friendMgr->block(fromId);
 
     SigMsg sig = buildSig(SigType::FriendRej);
-    SignalingClient::send(fromIp, sig);
+    sendDirectSignal(fromIp, sig, false);
     rebuildRequestsList();
     refreshRequestsBadge();
 }
@@ -1741,9 +1780,11 @@ void MainWindow::rebuildRequestsList()
             m_friendMgr->removePending(QString::fromStdString(reqCopy.fromId));
             FriendInfo f;
             f.id = reqCopy.fromId; f.name = reqCopy.fromName; f.ip = reqCopy.fromIp;
+            f.authPublicKey = reqCopy.authPublicKey;
+            f.authFingerprint = reqCopy.authFingerprint;
             commitAddFriend(f);
             SigMsg sig = buildSig(SigType::FriendAcc);
-            SignalingClient::sendReliable(QString::fromStdString(reqCopy.fromIp), sig);
+            sendDirectSignal(QString::fromStdString(reqCopy.fromIp), sig, true);
             rebuildRequestsList();
             refreshRequestsBadge();
         });
@@ -1751,7 +1792,7 @@ void MainWindow::rebuildRequestsList()
             m_friendMgr->removePending(QString::fromStdString(reqCopy.fromId));
             m_friendMgr->block(QString::fromStdString(reqCopy.fromId));
             SigMsg sig = buildSig(SigType::FriendRej);
-            SignalingClient::send(QString::fromStdString(reqCopy.fromIp), sig);
+            sendDirectSignal(QString::fromStdString(reqCopy.fromIp), sig, false);
             rebuildRequestsList();
             refreshRequestsBadge();
         });
@@ -2255,11 +2296,58 @@ SigMsg MainWindow::buildSig(const std::string& type) const
 #else
     sig.platform = "unknown";
 #endif
+    if (m_security) {
+        sig.auth_alg = "ed25519";
+        sig.auth_public_key = m_security->publicKeyBase64().toStdString();
+        sig.auth_fingerprint = m_security->fingerprint().toStdString();
+    }
     sig.type      = type;
     sig.from_id   = m_myId.toStdString();
     sig.from_name = m_myName.toStdString();
     sig.ts        = Helpers::nowMs();
     return sig;
+}
+
+
+// ── Secure signaling helpers ─────────────────────────────────────────────────
+
+bool MainWindow::signSignal(SigMsg& msg) const
+{
+    return m_security && m_security->signMessage(msg);
+}
+
+void MainWindow::sendDirectSignal(const QString& ip, SigMsg msg, bool reliable) const
+{
+    if (m_security) m_security->signMessage(msg);
+    if (reliable) SignalingClient::sendReliable(ip, msg);
+    else          SignalingClient::send(ip, msg);
+}
+
+bool MainWindow::verifyCriticalSignal(const SigMsg& msg) const
+{
+    if (!m_security) return false;
+
+    QString expectedPublicKey;
+    if (m_friendMgr) {
+        if (auto* f = m_friendMgr->getFriend(QString::fromStdString(msg.from_id)))
+            expectedPublicKey = QString::fromStdString(f->authPublicKey);
+        if (expectedPublicKey.isEmpty()) {
+            for (const auto& req : m_friendMgr->pending()) {
+                if (req.fromId == msg.from_id) {
+                    expectedPublicKey = QString::fromStdString(req.authPublicKey);
+                    break;
+                }
+            }
+        }
+    }
+
+    const bool ok = m_security->verifyMessage(msg, expectedPublicKey);
+    if (!ok) return false;
+
+    if (!msg.auth_fingerprint || !msg.auth_public_key) return false;
+    const QString fp = SecurityManager::fingerprintForPublicKey(
+        QString::fromStdString(*msg.auth_public_key));
+    return fp == QString::fromStdString(*msg.auth_fingerprint);
 }
 
 // Helper: canonical conversation key (sorted peer IDs joined by -)

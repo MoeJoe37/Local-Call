@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(LocalCall VERSION 1.2.0 LANGUAGES CXX)
+project(LocalCall VERSION 2.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -68,6 +68,7 @@ if(MSVC AND DEFINED CMAKE_PREFIX_PATH)
 endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Concurrent)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 
 set(HAS_MULTIMEDIA FALSE)
 if(LOCALCALL_WITH_MULTIMEDIA)
@@ -112,12 +113,12 @@ if(NOT LOCALCALL_WITH_WEBRTC STREQUAL "OFF")
         find_package(unofficial-libyuv CONFIG QUIET)
     endif()
 
-    if(Qt6WebSockets_FOUND AND LibDataChannel_FOUND AND OpenH264_FOUND)
+    if(Qt6WebSockets_FOUND AND LibDataChannel_FOUND AND OpenH264_FOUND AND HAS_MULTIMEDIA AND (unofficial-libopus_FOUND OR Opus_FOUND) AND (libyuv_FOUND OR unofficial-libyuv_FOUND))
         set(HAS_WEBRTC TRUE)
         message(STATUS "WebRTC/libdatachannel: ENABLED")
     elseif(LOCALCALL_WITH_WEBRTC STREQUAL "ON")
         message(FATAL_ERROR
-            "WebRTC was requested but dependencies were not found. Required: Qt6 WebSockets, libdatachannel, OpenH264.\n"
+            "WebRTC was requested but dependencies were not found. Required: Qt6 Multimedia, Qt6 WebSockets, libdatachannel, OpenH264, Opus, and libyuv.\n"
             "Set -DLOCALCALL_WITH_WEBRTC=OFF to build the stable LAN TCP/UDP version only.")
     else()
         message(STATUS "WebRTC/libdatachannel: not found, optional RTC module disabled")
@@ -145,6 +146,7 @@ set(LOCALCALL_SOURCES
     src/FriendManager.cpp
     src/ChatStore.cpp
     src/FirewallHelper.cpp
+    src/SecurityManager.cpp
     src/NotificationWindow.cpp
     src/InputDialog.cpp
     src/GroupCreateDialog.cpp
@@ -158,6 +160,7 @@ set(LOCALCALL_HEADERS
     include/ChatMessage.h
     include/ChatStore.h
     include/FirewallHelper.h
+    include/SecurityManager.h
     include/FriendInfo.h
     include/FriendManager.h
     include/GroupCreateDialog.h
@@ -180,9 +183,13 @@ if(HAS_MULTIMEDIA)
     list(APPEND LOCALCALL_HEADERS include/VoiceNoteRecorder.h)
 endif()
 
-if(HAS_MULTIMEDIA OR HAS_OPENCV)
-    list(APPEND LOCALCALL_SOURCES src/MediaWorker.cpp src/CallWindow.cpp)
-    list(APPEND LOCALCALL_HEADERS include/MediaWorker.h include/CallWindow.h)
+if(HAS_MULTIMEDIA OR HAS_OPENCV OR HAS_WEBRTC)
+    list(APPEND LOCALCALL_SOURCES src/CallWindow.cpp)
+    list(APPEND LOCALCALL_HEADERS include/CallWindow.h)
+    if(HAS_MULTIMEDIA OR HAS_OPENCV)
+        list(APPEND LOCALCALL_SOURCES src/MediaWorker.cpp)
+        list(APPEND LOCALCALL_HEADERS include/MediaWorker.h)
+    endif()
 endif()
 
 if(HAS_WEBRTC)
@@ -230,6 +237,7 @@ target_link_libraries(LocalCall PRIVATE
     Qt6::Widgets
     Qt6::Network
     Qt6::Concurrent
+    OpenSSL::Crypto
 )
 
 if(nlohmann_json_FOUND)

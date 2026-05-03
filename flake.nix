@@ -11,7 +11,7 @@
       packages = forAllSystems (pkgs: {
         default = pkgs.stdenv.mkDerivation {
           pname = "localcall";
-          version = "1.2.0";
+          version = "2.0.0";
           src = ./.;
 
           nativeBuildInputs = with pkgs; [
@@ -27,13 +27,15 @@
             qt6.qtwayland
             opencv
             nlohmann_json
+            openssl
             opus
             openh264
             libyuv
+            libdatachannel
           ];
 
           cmakeFlags = [
-            "-DLOCALCALL_WITH_WEBRTC=OFF"
+            "-DLOCALCALL_WITH_WEBRTC=AUTO"
             "-DLOCALCALL_WITH_OPENCV=AUTO"
             "-DLOCALCALL_WITH_MULTIMEDIA=ON"
           ];
@@ -43,7 +45,7 @@
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [ cmake ninja pkg-config qt6.wrapQtAppsHook ];
-          buildInputs = with pkgs; [ qt6.qtbase qt6.qtmultimedia qt6.qtwayland opencv nlohmann_json opus openh264 libyuv ];
+          buildInputs = with pkgs; [ qt6.qtbase qt6.qtmultimedia qt6.qtwayland opencv nlohmann_json openssl opus openh264 libyuv libdatachannel ];
         };
       });
     };

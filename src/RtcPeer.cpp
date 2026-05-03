@@ -1,6 +1,7 @@
 #include "RtcPeer.h"
 #include <QMutexLocker>
 #include <QPointer>
+#include <QByteArray>
 
 RtcPeer::RtcPeer(const QString&   localId,
                   const QString&   remoteId,
@@ -10,7 +11,12 @@ RtcPeer::RtcPeer(const QString&   localId,
 {
     rtc::Configuration config;
     if (!cfg.localNetworkOnly) {
-        config.iceServers.emplace_back("stun:stun.l.google.com:19302");
+        if (cfg.iceServers.empty()) {
+            config.iceServers.emplace_back("stun:stun.l.google.com:19302");
+        } else {
+            for (const auto& server : cfg.iceServers)
+                config.iceServers.emplace_back(server);
+        }
     }
 
     m_pc = std::make_shared<rtc::PeerConnection>(config);
@@ -73,15 +79,11 @@ void RtcPeer::setupCallbacks()
         if (!isVideo && !isAudio) return;
 
         if (isVideo) {
-            auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
-                0, "H264", 96, rtc::H264RtpPacketizer::defaultClockRate);
-            auto depack = std::make_shared<rtc::H264RtpPacketizer>(
-                rtc::H264RtpPacketizer::Separator::StartSequence, rtpConfig);
+            auto depack = std::make_shared<rtc::H264RtpDepacketizer>(
+                rtc::H264RtpDepacketizer::Separator::StartSequence);
             track->setMediaHandler(depack);
         } else {
-            auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
-                0, "OPUS", 111, 48000, 2);
-            auto depack = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
+            auto depack = std::make_shared<rtc::RtpDepacketizer>();
             track->setMediaHandler(depack);
         }
 

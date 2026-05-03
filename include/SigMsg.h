@@ -26,6 +26,9 @@ namespace SigType {
     inline const std::string CallAcc     = "call_acc";
     inline const std::string CallRej     = "call_rej";
     inline const std::string CallEnd     = "call_end";
+    inline const std::string RtcOffer    = "rtc_offer";
+    inline const std::string RtcAnswer   = "rtc_answer";
+    inline const std::string RtcIce      = "rtc_ice";
     inline const std::string GrpInv      = "grp_inv";
     inline const std::string GrpAcc      = "grp_acc";
     inline const std::string GrpRej      = "grp_rej";
@@ -74,6 +77,10 @@ struct SigMsg {
     std::optional<int> schema;
     std::optional<std::string> app_version;
     std::optional<std::string> platform;
+    std::optional<std::string> auth_alg;
+    std::optional<std::string> auth_public_key;
+    std::optional<std::string> auth_fingerprint;
+    std::optional<std::string> auth_signature;
     std::string type;
     std::string from_id;
     std::string from_name;
@@ -85,6 +92,13 @@ struct SigMsg {
     std::optional<std::string> group_name;
     std::optional<std::vector<MemberDto>> members;
     std::optional<std::string> mode;
+    std::optional<std::string> rtc_session_id;
+    std::optional<std::string> sdp_type;
+    std::optional<std::string> sdp;
+    std::optional<std::string> candidate;
+    std::optional<std::string> candidate_mid;
+    std::optional<int> candidate_mline;
+    std::optional<std::string> transport;
     std::optional<std::string> target_id;
     std::optional<std::string> owner_id;
     std::optional<bool> perm_msg;
@@ -105,6 +119,10 @@ inline void to_json(nlohmann::json& j, const SigMsg& m) {
     if (m.schema)      j["schema"]      = *m.schema;
     if (m.app_version) j["app_version"] = *m.app_version;
     if (m.platform)    j["platform"]    = *m.platform;
+    if (m.auth_alg)         j["auth_alg"]         = *m.auth_alg;
+    if (m.auth_public_key)  j["auth_public_key"]  = *m.auth_public_key;
+    if (m.auth_fingerprint) j["auth_fingerprint"] = *m.auth_fingerprint;
+    if (m.auth_signature)   j["auth_signature"]   = *m.auth_signature;
     if (m.text)       j["text"]       = *m.text;
     if (m.file_name)  j["file_name"]  = *m.file_name;
     if (m.mime)       j["mime"]       = *m.mime;
@@ -113,6 +131,13 @@ inline void to_json(nlohmann::json& j, const SigMsg& m) {
     if (m.group_name) j["group_name"] = *m.group_name;
     if (m.members)    j["members"]    = *m.members;
     if (m.mode)       j["mode"]       = *m.mode;
+    if (m.rtc_session_id) j["rtc_session_id"] = *m.rtc_session_id;
+    if (m.sdp_type)       j["sdp_type"]       = *m.sdp_type;
+    if (m.sdp)            j["sdp"]            = *m.sdp;
+    if (m.candidate)      j["candidate"]      = *m.candidate;
+    if (m.candidate_mid)  j["candidate_mid"]  = *m.candidate_mid;
+    if (m.candidate_mline)j["candidate_mline"] = *m.candidate_mline;
+    if (m.transport)      j["transport"]      = *m.transport;
     if (m.target_id)  j["target_id"]  = *m.target_id;
     if (m.owner_id)   j["owner_id"]   = *m.owner_id;
     if (m.perm_msg)      j["perm_msg"]      = *m.perm_msg;
@@ -136,12 +161,24 @@ inline void from_json(const nlohmann::json& j, SigMsg& m) {
     os("protocol",    m.protocol);
     os("app_version", m.app_version);
     os("platform",    m.platform);
+    os("auth_alg", m.auth_alg);
+    os("auth_public_key", m.auth_public_key);
+    os("auth_fingerprint", m.auth_fingerprint);
+    os("auth_signature", m.auth_signature);
     if (j.contains("schema") && j["schema"].is_number_integer()) m.schema = j["schema"].get<int>();
 
     os("text",       m.text);      os("file_name",  m.file_name);
     os("mime",       m.mime);      os("data",       m.data);
     os("group_id",   m.group_id);  os("group_name", m.group_name);
-    os("mode",       m.mode);      os("target_id",  m.target_id);
+    os("mode",       m.mode);
+    os("rtc_session_id", m.rtc_session_id);
+    os("sdp_type", m.sdp_type);
+    os("sdp", m.sdp);
+    os("candidate", m.candidate);
+    os("candidate_mid", m.candidate_mid);
+    os("transport", m.transport);
+    if (j.contains("candidate_mline") && j["candidate_mline"].is_number_integer()) m.candidate_mline = j["candidate_mline"].get<int>();
+    os("target_id",  m.target_id);
     os("owner_id",   m.owner_id);
 
     if (j.contains("members") && !j["members"].is_null())

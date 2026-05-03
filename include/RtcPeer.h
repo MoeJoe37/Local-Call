@@ -4,11 +4,18 @@
 #include <QByteArray>
 #include <QMutex>
 #include <memory>
+#include <vector>
+#include <string>
 
 #include <rtc/rtc.hpp>
+#include <rtc/h264rtpdepacketizer.hpp>
+#include <rtc/h264rtppacketizer.hpp>
+#include <rtc/rtpdepacketizer.hpp>
+#include <rtc/rtppacketizer.hpp>
 
 struct RtcConfig {
-    bool   localNetworkOnly{true};
+    bool   localNetworkOnly{false};
+    std::vector<std::string> iceServers;
     quint32 videoSsrc{1};
     quint32 audioSsrc{2};
     int     videoPt{96};

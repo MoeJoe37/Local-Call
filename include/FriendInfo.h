@@ -6,6 +6,8 @@ struct FriendInfo {
     std::string id;
     std::string name;
     std::string ip;
+    std::string authPublicKey;
+    std::string authFingerprint;
 
     // Runtime-only (not persisted)
     bool isOnline    = false;
@@ -17,26 +19,36 @@ struct FriendInfo {
 // Serialization — use nlohmann::json explicitly, NOT the 'json' alias
 inline void to_json(nlohmann::json& j, const FriendInfo& f) {
     j = nlohmann::json{{"id", f.id}, {"name", f.name}, {"ip", f.ip}};
+    if (!f.authPublicKey.empty())  j["authPublicKey"]  = f.authPublicKey;
+    if (!f.authFingerprint.empty()) j["authFingerprint"] = f.authFingerprint;
 }
 
 inline void from_json(const nlohmann::json& j, FriendInfo& f) {
     if (j.contains("id"))   j.at("id").get_to(f.id);
     if (j.contains("name")) j.at("name").get_to(f.name);
     if (j.contains("ip"))   j.at("ip").get_to(f.ip);
+    if (j.contains("authPublicKey"))  j.at("authPublicKey").get_to(f.authPublicKey);
+    if (j.contains("authFingerprint")) j.at("authFingerprint").get_to(f.authFingerprint);
 }
 
 struct PendingRequest {
     std::string fromId;
     std::string fromName;
     std::string fromIp;
+    std::string authPublicKey;
+    std::string authFingerprint;
 };
 
 inline void to_json(nlohmann::json& j, const PendingRequest& r) {
     j = nlohmann::json{{"fromId", r.fromId}, {"fromName", r.fromName}, {"fromIp", r.fromIp}};
+    if (!r.authPublicKey.empty())  j["authPublicKey"]  = r.authPublicKey;
+    if (!r.authFingerprint.empty()) j["authFingerprint"] = r.authFingerprint;
 }
 
 inline void from_json(const nlohmann::json& j, PendingRequest& r) {
     if (j.contains("fromId"))   j.at("fromId").get_to(r.fromId);
     if (j.contains("fromName")) j.at("fromName").get_to(r.fromName);
     if (j.contains("fromIp"))   j.at("fromIp").get_to(r.fromIp);
+    if (j.contains("authPublicKey"))  j.at("authPublicKey").get_to(r.authPublicKey);
+    if (j.contains("authFingerprint")) j.at("authFingerprint").get_to(r.authFingerprint);
 }

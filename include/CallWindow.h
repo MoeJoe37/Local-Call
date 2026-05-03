@@ -1,4 +1,5 @@
 #pragma once
+
 #include <QDialog>
 #include <QCloseEvent>
 #include <QString>
@@ -6,8 +7,18 @@
 #include <QComboBox>
 #include <QSlider>
 #include <QLabel>
+#include <QImage>
+#include <QUuid>
 #include "CallTypes.h"
+#include "SigMsg.h"
+
+#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
 #include "MediaWorker.h"
+#endif
+#ifdef HAS_WEBRTC
+#include "RtcPeer.h"
+#include "MediaPipeline.h"
+#endif
 
 class QPushButton;
 class QCheckBox;
@@ -17,16 +28,19 @@ class CallWindow : public QDialog {
 public:
     CallWindow(const QString& peerIp, const QString& peerName,
                CallMode mode, const QString& myId, const QString& myName,
+               bool initiator = false,
                QWidget* parent = nullptr);
-    ~CallWindow();
+    ~CallWindow() override;
 
     void doClose();
+    void handleRtcSignal(const SigMsg& msg);
 
 protected:
     void closeEvent(QCloseEvent* e) override;
 
 signals:
     void hangupRequested();
+    void rtcSignalReady(SigMsg msg);
 
 private slots:
     void onMute();
@@ -42,16 +56,26 @@ private slots:
 private:
     void startMedia();
     void stopMedia();
+    SigMsg makeRtcSignal(const std::string& type) const;
 
     QString       m_peerIp;
     QString       m_peerName;
     CallMode      m_mode;
     QString       m_myId;
     QString       m_myName;
+    bool          m_initiator = false;
+    QString       m_rtcSessionId;
 
+#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
     QList<MediaWorker*> m_workers;
     MediaWorker*        m_audioSender = nullptr;
     MediaWorker*        m_videoSender = nullptr;
+#endif
+
+#ifdef HAS_WEBRTC
+    RtcPeer*       m_rtcPeer = nullptr;
+    MediaPipeline* m_pipeline = nullptr;
+#endif
 
     // UI elements
     QLabel*      m_remoteVideo    = nullptr;
@@ -64,7 +88,6 @@ private:
     QCheckBox*   m_chkScreenAudio = nullptr;
     QWidget*     m_screenAudioPanel = nullptr;
 
-    // Quality controls (visible only when video is active)
     QWidget*   m_qualityPanel = nullptr;
     QComboBox* m_cmbRes       = nullptr;
     QComboBox* m_cmbFps       = nullptr;

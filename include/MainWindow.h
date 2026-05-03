@@ -18,10 +18,11 @@
 #include "FriendManager.h"
 class NotificationWindow;
 #include "ChatStore.h"
+#include "SecurityManager.h"
 #ifdef HAS_MULTIMEDIA
 #include "VoiceNoteRecorder.h"
 #endif
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
 #include "CallWindow.h"
 #endif
 
@@ -131,6 +132,7 @@ private:
     void handleChatMsg(const SigMsg& msg, const QString& ip);
     void handleCallInv(const SigMsg& msg, const QString& ip);
     void handleCallAcc(const SigMsg& msg);
+    void handleRtcSignal(const SigMsg& msg, const QString& ip);
     void handleGrpInv(const SigMsg& msg, const QString& ip);
     void handleGrpLeave(const SigMsg& msg);
     void handleGroupMsg(const SigMsg& msg);
@@ -142,7 +144,10 @@ private:
 
     // Helpers
     void sendCallInvite(FriendInfo* f, const QString& mode);
-    void openCallWindow(const QString& ip, const QString& name, CallMode mode);
+    void openCallWindow(const QString& ip, const QString& name, CallMode mode, bool initiator = false);
+    bool verifyCriticalSignal(const SigMsg& msg) const;
+    bool signSignal(SigMsg& msg) const;
+    void sendDirectSignal(const QString& ip, SigMsg msg, bool reliable = false) const;
     void sendFile(bool isGroup, bool imagesOnly);
     void broadcastToGroup(GroupInfo* g, const SigMsg& sig);
     void commitAddFriend(const FriendInfo& f);
@@ -179,6 +184,7 @@ private:
     SignalingServer* m_sigServer  = nullptr;
     FriendManager*   m_friendMgr  = nullptr;
     ChatStore*       m_chatStore  = nullptr;
+    SecurityManager* m_security   = nullptr;
 
     // ── Upload/download progress tracking ────────────────────────────────────
     struct OutgoingTransfer {
@@ -227,7 +233,7 @@ private:
 #endif
 
     // Call window
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
     CallWindow* m_callWin = nullptr;
 #else
     void* m_callWin = nullptr;

@@ -7,6 +7,8 @@
 ./build/LocalCall
 ```
 
+By default, the build tries to enable secure WebRTC calls automatically when the distro provides the needed packages.
+
 ## Fedora / Nobara
 
 ```bash
@@ -43,7 +45,7 @@ nix build
 ## Windows
 
 ```powershell
-cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.11.0/msvc2022_64"
+cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.11.0/msvc2022_64" -DLOCALCALL_WITH_WEBRTC=AUTO
 cmake --build build --config Release
 cd build\Release
 windeployqt --release LocalCall.exe
@@ -58,9 +60,26 @@ LOCALCALL_WITH_OPENCV     = AUTO | ON | OFF
 LOCALCALL_WITH_WEBRTC     = AUTO | ON | OFF
 ```
 
-Use this stable baseline when a distro does not provide libdatachannel/OpenH264 CMake packages:
+Use this fallback when a distro does not provide libdatachannel/OpenH264/Opus/libyuv CMake packages:
 
 ```bash
 cmake -S . -B build -G Ninja -DLOCALCALL_WITH_WEBRTC=OFF
 cmake --build build --parallel
 ```
+
+## Low-Latency Internet Calling
+
+Configure STUN/TURN with:
+
+```bash
+export LOCALCALL_ICE_SERVERS="stun:stun.l.google.com:19302,turn:user:pass@turn.example.com:3478"
+./build/LocalCall
+```
+
+Latency priority order:
+
+1. Same LAN / direct host ICE candidate.
+2. STUN-discovered peer-to-peer route.
+3. TURN relay only when direct ICE fails.
+
+TURN is more reliable across strict NATs, but it usually adds latency because media is relayed through a server.

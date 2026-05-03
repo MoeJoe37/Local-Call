@@ -70,7 +70,7 @@ void FriendManager::removeFriend(const QString& id)
     bool alreadyFormer = std::any_of(m_formerFriends.begin(), m_formerFriends.end(),
         [&](const FriendInfo& f){ return f.id == id.toStdString(); });
     if (!alreadyFormer) {
-        FriendInfo former; former.id = copy.id; former.name = copy.name; former.ip = copy.ip;
+        FriendInfo former; former.id = copy.id; former.name = copy.name; former.ip = copy.ip; former.authPublicKey = copy.authPublicKey; former.authFingerprint = copy.authFingerprint;
         m_formerFriends.append(former);
         saveFormer();
     }

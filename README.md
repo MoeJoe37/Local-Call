@@ -1,22 +1,37 @@
 # Local Call
 
-Local Call is a Qt/C++ LAN communication app for local chat, friend requests, file sharing, voice notes, and local audio/video calls.
+Local Call is a Qt/C++ peer-to-peer communication app for LAN chat, friend requests, file sharing, voice notes, and low-latency audio/video calls.
 
-This version was polished for cross-platform Linux builds while preserving the existing Local Call wire protocol so Windows, Fedora/Nobara/Bazzite, Arch-based systems, NixOS, and other future builds can still communicate on the same LAN.
+This package updates the previous build into a **secure RTC-first** version. The old raw UDP call path is kept only as a compatibility fallback when WebRTC dependencies are unavailable.
 
-## What Changed in This Version
+## What Changed in Version 2.0.0
 
-- Reworked CMake into a cleaner cross-platform build with feature switches.
-- Added Fedora/Nobara/Bazzite, Arch, and NixOS build paths.
-- Added Linux desktop launcher/icon install support.
-- Kept the original TCP length-prefixed JSON framing for compatibility.
-- Added optional protocol metadata: `protocol`, `schema`, `app_version`, and `platform`.
-- Improved peer discovery on Linux by ranking usable LAN IPv4 interfaces and preferring real adapters over common virtual adapters.
-- Made TCP discovery reads more robust when packets arrive partially.
-- Made the TCP server able to parse multiple complete frames per connection while still accepting old one-frame clients.
-- Moved app data to the normal Qt `AppDataLocation`, with fallback reads from the old `AppDataLocation/Local Call` folder.
-- Switched JSON saves to atomic writes to reduce the chance of corrupt history after a crash/power loss.
-- Added `docs/PROTOCOL.md` explaining the compatibility rules and Matrix-inspired event-envelope approach.
+- Added **WebRTC/libdatachannel-first calls** using ICE + STUN/TURN-capable negotiation.
+- Added **encrypted media transport** through WebRTC DTLS-SRTP.
+- Added persistent **Ed25519 device identity** using OpenSSL.
+- Added signed critical signaling for friend requests, call invites, call accept/end, SDP offers/answers, and ICE candidates.
+- Added fingerprint pinning fields to saved friends and pending requests.
+- Added RTC signaling events: `rtc_offer`, `rtc_answer`, and `rtc_ice`.
+- Tuned the media path for lower latency:
+  - 10 ms Opus frames at 48 kHz.
+  - Opus DTX/FEC disabled by default to avoid extra buffering.
+  - moderate encoder complexity.
+  - 360p/30 FPS default video profile with lower bitrate bias.
+- Added configurable ICE servers through `LOCALCALL_ICE_SERVERS`.
+- Updated Fedora/Nobara/Bazzite, Arch, and NixOS dependency paths.
+- Preserved the original length-prefixed JSON framing so older Local Call builds can still understand non-RTC events.
+
+## Security / Network Capability Matrix
+
+| Capability | Secure WebRTC path | Legacy raw UDP fallback |
+|---|---:|---:|
+| End-to-end encrypted call media | Yes, DTLS-SRTP | No |
+| User/device authentication | Yes, Ed25519 signed critical signaling | No |
+| NAT traversal | Yes, ICE with STUN/TURN configuration | No |
+| Internet calling | Yes, when peers can exchange signaling and ICE succeeds; TURN may be required on strict NATs | No |
+| Packet retransmission / congestion handling | Yes for WebRTC control/data layers; media uses real-time RTP behavior to avoid latency spikes | No custom UDP recovery |
+
+For the lowest latency, use direct ICE/STUN whenever possible. TURN relay works as a fallback but adds extra network distance and therefore more latency.
 
 ## Features
 
@@ -24,31 +39,59 @@ This version was polished for cross-platform Linux builds while preserving the e
 - Friend requests, accept/decline, remove, block, and persistent contacts.
 - 1-to-1 chat with text, images, files, and voice notes.
 - Group chat with owner/helper roles and per-member permissions.
-- Optional audio/video calls and screen-sharing when multimedia/OpenCV dependencies are present.
+- Secure WebRTC audio/video calls when dependencies are available.
+- Optional legacy LAN media fallback when WebRTC is disabled.
 - Toast-style notifications for messages, calls, and requests.
 - Dark UI theme.
 - Persistent local chat history.
-- Windows firewall helper; Linux firewall helper script included.
+- Windows firewall helper and Linux firewall helper script.
+
+## ICE / STUN / TURN Configuration
+
+By default, Local Call uses:
+
+```bash
+stun:stun.l.google.com:19302
+```
+
+You can override this with a comma-separated environment variable:
+
+```bash
+export LOCALCALL_ICE_SERVERS="stun:stun.l.google.com:19302,turn:user:pass@turn.example.com:3478"
+./build/LocalCall
+```
+
+Use TURN only when direct peer-to-peer ICE fails, because TURN relays media through a server and usually increases latency.
 
 ## Network Protocol
 
-Local Call signaling uses:
+Classic signaling still uses:
 
 ```text
 [4 bytes big-endian length][JSON body]
 ```
 
-The protocol intentionally stays JSON-based and extensible. New builds add metadata fields but old builds can ignore them. See [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
+Secure calls add signed JSON events over the same signaling channel:
+
+- `call_inv`
+- `call_acc`
+- `call_end`
+- `rtc_offer`
+- `rtc_answer`
+- `rtc_ice`
+
+See [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
 ## Ports
 
 | Purpose | Protocol | Port |
 |---|---:|---:|
 | LAN discovery | UDP | 50005 |
-| Signaling/events | TCP | 50010 |
-| Audio stream | UDP | 50100 |
-| Video stream | UDP | 50105 |
-| Group call | UDP | 50200 |
+| Local signaling/events | TCP | 50010 |
+| Legacy audio stream | UDP | 50100 |
+| Legacy video stream | UDP | 50105 |
+| Legacy group call | UDP | 50200 |
+| WebRTC media | UDP/TCP selected by ICE | dynamic |
 
 ## Dependencies
 
@@ -57,15 +100,21 @@ Required:
 - CMake 3.20+
 - C++20 compiler
 - Qt 6 Core, Gui, Widgets, Network, Concurrent
+- OpenSSL Crypto
 - nlohmann/json
 
-Recommended:
+Recommended for secure calls:
 
-- Qt 6 Multimedia for audio and voice notes
-- OpenCV for video/screen-share features
-- Qt 6 WebSockets + libdatachannel/OpenH264/Opus/libyuv for the optional WebRTC module
+- Qt 6 Multimedia
+- Qt 6 WebSockets
+- libdatachannel
+- OpenH264
+- Opus
+- libyuv
 
-The stable LAN TCP/UDP app works without the optional WebRTC module.
+Optional fallback video/screen-share:
+
+- OpenCV
 
 ## Build on Fedora / Nobara
 
@@ -116,7 +165,7 @@ For development:
 
 ```bash
 nix develop
-cmake -S . -B build -G Ninja -DLOCALCALL_WITH_WEBRTC=OFF
+cmake -S . -B build -G Ninja
 cmake --build build --parallel
 ./build/LocalCall
 ```
@@ -129,11 +178,13 @@ Install:
 - CMake
 - Qt 6 MSVC 2022 64-bit kit
 - Qt Multimedia
+- OpenSSL
+- libdatachannel/OpenH264/Opus/libyuv through vcpkg or another CMake-compatible package source
 
 Then:
 
 ```powershell
-cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.11.0/msvc2022_64"
+cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.11.0/msvc2022_64" -DLOCALCALL_WITH_WEBRTC=AUTO
 cmake --build build --config Release
 cd build\Release
 windeployqt --release LocalCall.exe
@@ -151,11 +202,11 @@ LocalCall.exe
 Examples:
 
 ```bash
-# Stable basic LAN build with chat, discovery, files, and no optional RTC module
-cmake -S . -B build -G Ninja -DLOCALCALL_WITH_WEBRTC=OFF
+# Secure RTC preferred build
+cmake -S . -B build -G Ninja -DLOCALCALL_WITH_WEBRTC=ON
 
-# Force OpenCV and fail if missing
-cmake -S . -B build -G Ninja -DLOCALCALL_WITH_OPENCV=ON
+# Compatibility-only LAN build without WebRTC
+cmake -S . -B build -G Ninja -DLOCALCALL_WITH_WEBRTC=OFF
 ```
 
 ## Linux Firewall
@@ -185,19 +236,13 @@ LocalCall/
 ├── include/
 ├── src/
 ├── scripts/
-│   ├── build-linux.sh
-│   ├── install-deps-fedora.sh
-│   ├── install-deps-arch.sh
-│   └── open-firewall-linux.sh
 ├── packaging/linux/
-│   ├── localcall.desktop
-│   └── localcall.png
 └── third_party/nlohmann/json.hpp
 ```
 
 ## Notes
 
-- All devices must be on the same LAN/subnet unless routed/firewall rules allow the ports above.
-- Linux distributions with strict firewalls may need the firewall script.
-- Older Local Call clients can still parse the new event JSON because the original field names and framing were preserved.
-- This app is inspired by Matrix design principles such as open JSON events, extensibility, and user-controlled communication, but it is not a Matrix protocol client and does not federate with Matrix homeservers.
+- The secure low-latency path depends on WebRTC dependencies being found at build time.
+- TURN can make internet calling work behind strict NATs, but direct peer-to-peer ICE is preferred for latency.
+- Legacy clients can still use non-RTC LAN events, but secure calls require the new v2 WebRTC signaling.
+- The app is inspired by Matrix design ideas such as versioned events and extensible JSON envelopes, but it is not a Matrix client and does not federate with Matrix homeservers.
