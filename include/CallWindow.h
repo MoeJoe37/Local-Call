@@ -5,7 +5,6 @@
 #include <QString>
 #include <QList>
 #include <QComboBox>
-#include <QSlider>
 #include <QLabel>
 #include <QImage>
 #include <QUuid>
@@ -91,7 +90,7 @@ private:
     QWidget*   m_qualityPanel = nullptr;
     QComboBox* m_cmbRes       = nullptr;
     QComboBox* m_cmbFps       = nullptr;
-    QSlider*   m_sldQuality   = nullptr;
+    QComboBox* m_cmbQuality   = nullptr;
     QLabel*    m_lblQuality   = nullptr;
 
     bool m_muted    = false;

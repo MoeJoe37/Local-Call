@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(LocalCall VERSION 2.0.0 LANGUAGES CXX)
+project(LocalCall VERSION 2.0.13 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,13 +17,36 @@ include(GNUInstallDirs)
 #   LOCALCALL_WITH_MULTIMEDIA=ON|OFF
 set(LOCALCALL_WITH_OPENCV "AUTO" CACHE STRING "Build OpenCV video/screen-share support: AUTO, ON, OFF")
 set_property(CACHE LOCALCALL_WITH_OPENCV PROPERTY STRINGS AUTO ON OFF)
-set(LOCALCALL_WITH_WEBRTC "AUTO" CACHE STRING "Build libdatachannel WebRTC support: AUTO, ON, OFF")
+set(LOCALCALL_WITH_WEBRTC "ON" CACHE STRING "Build libdatachannel WebRTC support: AUTO, ON, OFF")
 set_property(CACHE LOCALCALL_WITH_WEBRTC PROPERTY STRINGS AUTO ON OFF)
 option(LOCALCALL_WITH_MULTIMEDIA "Build Qt Multimedia voice-note/audio support" ON)
 option(LOCALCALL_INSTALL_DESKTOP_FILE "Install Linux .desktop launcher and icon" ON)
+option(LOCALCALL_INSTALL_QT_RUNTIME "Deploy Qt runtime dependencies on cmake --install using Qt's CMake deployment API" ON)
+# Windows note: older build folders may cache LOCALCALL_POST_BUILD_DEPLOY_QT=OFF
+# from previous releases. Force it ON by default on Windows because launching a
+# Qt executable without a freshly deployed matching Qt runtime causes entry-point
+# errors such as QSlider destructor not found. Use LOCALCALL_DISABLE_POST_BUILD_DEPLOY_QT=ON
+# only for CI/package systems that deploy Qt themselves.
+option(LOCALCALL_DISABLE_POST_BUILD_DEPLOY_QT "Advanced: disable automatic Windows Qt deployment after build." OFF)
+if(WIN32 AND NOT LOCALCALL_DISABLE_POST_BUILD_DEPLOY_QT)
+    set(LOCALCALL_POST_BUILD_DEPLOY_QT ON CACHE BOOL "On Windows, run the matching windeployqt after build." FORCE)
+else()
+    option(LOCALCALL_POST_BUILD_DEPLOY_QT "On Windows, run the matching windeployqt after build." OFF)
+endif()
 
 if(MSVC)
     add_compile_options(/Zc:__cplusplus /permissive-)
+endif()
+
+# Make installed Linux/macOS bundles prefer libraries beside the executable/app
+# instead of accidentally loading incompatible system libraries. Windows is
+# handled by copying the exact Qt DLLs next to LocalCall.exe.
+if(UNIX AND NOT APPLE AND NOT ANDROID)
+    set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
+    set(CMAKE_INSTALL_RPATH "$ORIGIN;$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+elseif(APPLE)
+    set(CMAKE_INSTALL_RPATH "@executable_path/../Frameworks;@loader_path/../Frameworks")
 endif()
 
 # Helpful Qt auto-detection for local Qt online-installer builds. Linux distros,
@@ -100,28 +123,102 @@ if(NOT LOCALCALL_WITH_OPENCV STREQUAL "OFF")
 endif()
 
 set(HAS_WEBRTC FALSE)
+set(OPENH264_AVAILABLE FALSE)
+set(OPUS_AVAILABLE FALSE)
+set(LIBYUV_AVAILABLE FALSE)
+set(LIBDATACHANNEL_AVAILABLE FALSE)
+set(LIBDATACHANNEL_TARGET "")
 if(NOT LOCALCALL_WITH_WEBRTC STREQUAL "OFF")
-    find_package(Qt6 COMPONENTS WebSockets QUIET)
+    # vcpkg currently documents LibDataChannel::LibDataChannel, while several
+    # Linux/Nix packages expose lowercase package names or plain datachannel
+    # targets. Try all common variants before disabling the secure RTC path.
     find_package(LibDataChannel CONFIG QUIET)
-    find_package(OpenH264 CONFIG QUIET)
-    find_package(unofficial-libopus CONFIG QUIET)
-    if(NOT unofficial-libopus_FOUND)
-        find_package(Opus CONFIG QUIET)
+    if(NOT LibDataChannel_FOUND AND NOT TARGET LibDataChannel::LibDataChannel)
+        find_package(libdatachannel CONFIG QUIET)
     endif()
+    foreach(_candidate
+            LibDataChannel::LibDataChannel
+            libdatachannel::libdatachannel
+            datachannel
+            datachannel-static)
+        if(TARGET ${_candidate})
+            set(LIBDATACHANNEL_AVAILABLE TRUE)
+            set(LIBDATACHANNEL_TARGET ${_candidate})
+            break()
+        endif()
+    endforeach()
+    # If the package config did not create a known CMake target, fall back to
+    # a manual header/library search. Do not mark it available from *_FOUND
+    # alone, because that can produce an empty link line on some packages.
+    if(NOT LIBDATACHANNEL_AVAILABLE)
+        find_path(LIBDATACHANNEL_INCLUDE_DIR rtc/rtc.hpp PATH_SUFFIXES include)
+        find_library(LIBDATACHANNEL_LIBRARY NAMES datachannel libdatachannel)
+        if(LIBDATACHANNEL_INCLUDE_DIR AND LIBDATACHANNEL_LIBRARY)
+            set(LIBDATACHANNEL_AVAILABLE TRUE)
+        endif()
+    endif()
+
+    # vcpkg's opus port is named "opus" and normally provides Opus::opus.
+    # Some Linux distributions expose pkg-config/library-only installs, so keep
+    # a manual fallback to avoid disabling the RTC path unnecessarily.
+    find_package(Opus CONFIG QUIET)
+    if(Opus_FOUND OR TARGET Opus::opus)
+        set(OPUS_AVAILABLE TRUE)
+    else()
+        find_path(OPUS_INCLUDE_DIR opus/opus.h PATH_SUFFIXES include)
+        find_library(OPUS_LIBRARY NAMES opus libopus)
+        if(OPUS_INCLUDE_DIR AND OPUS_LIBRARY)
+            set(OPUS_AVAILABLE TRUE)
+        endif()
+    endif()
+
+    # vcpkg's openh264 port currently installs headers/libs/pkg-config, not a
+    # guaranteed CMake package config, so use find_path/find_library first.
+    find_package(OpenH264 CONFIG QUIET)
+    if(OpenH264_FOUND OR TARGET OpenH264::OpenH264 OR TARGET openh264::openh264)
+        set(OPENH264_AVAILABLE TRUE)
+    else()
+        find_path(OPENH264_INCLUDE_DIR wels/codec_api.h PATH_SUFFIXES include)
+        find_library(OPENH264_LIBRARY NAMES openh264 libopenh264)
+        if(OPENH264_INCLUDE_DIR AND OPENH264_LIBRARY)
+            set(OPENH264_AVAILABLE TRUE)
+        endif()
+    endif()
+
     find_package(libyuv CONFIG QUIET)
     if(NOT libyuv_FOUND)
         find_package(unofficial-libyuv CONFIG QUIET)
     endif()
+    if(libyuv_FOUND OR unofficial-libyuv_FOUND OR TARGET libyuv::libyuv OR TARGET unofficial::libyuv::libyuv OR TARGET yuv)
+        set(LIBYUV_AVAILABLE TRUE)
+    else()
+        find_path(LIBYUV_INCLUDE_DIR libyuv.h PATH_SUFFIXES include)
+        find_library(LIBYUV_LIBRARY NAMES yuv libyuv)
+        if(LIBYUV_INCLUDE_DIR AND LIBYUV_LIBRARY)
+            set(LIBYUV_AVAILABLE TRUE)
+        endif()
+    endif()
 
-    if(Qt6WebSockets_FOUND AND LibDataChannel_FOUND AND OpenH264_FOUND AND HAS_MULTIMEDIA AND (unofficial-libopus_FOUND OR Opus_FOUND) AND (libyuv_FOUND OR unofficial-libyuv_FOUND))
+    if(LIBDATACHANNEL_AVAILABLE AND HAS_MULTIMEDIA AND OPUS_AVAILABLE AND OPENH264_AVAILABLE AND LIBYUV_AVAILABLE)
         set(HAS_WEBRTC TRUE)
         message(STATUS "WebRTC/libdatachannel: ENABLED")
     elseif(LOCALCALL_WITH_WEBRTC STREQUAL "ON")
         message(FATAL_ERROR
-            "WebRTC was requested but dependencies were not found. Required: Qt6 Multimedia, Qt6 WebSockets, libdatachannel, OpenH264, Opus, and libyuv.\n"
-            "Set -DLOCALCALL_WITH_WEBRTC=OFF to build the stable LAN TCP/UDP version only.")
+            "\nWebRTC was requested, but one or more RTC dependencies were not found.\n"
+            "  Qt6 Multimedia      : ${HAS_MULTIMEDIA}\n"
+            "  libdatachannel      : ${LIBDATACHANNEL_AVAILABLE}\n"
+            "  Opus                : ${OPUS_AVAILABLE}\n"
+            "  OpenH264            : ${OPENH264_AVAILABLE}\n"
+            "  libyuv              : ${LIBYUV_AVAILABLE}\n\n"
+            "Windows fix: vcpkg installed the RTC libraries, but CMake did not find one of them. Delete build/, make sure CMAKE_TOOLCHAIN_FILE points to the same vcpkg root, then configure again.\n"
+            "Linux fix: install libdatachannel, opus, openh264, libyuv, and Qt Multimedia development packages. Qt WebSockets is no longer required.\n")
     else()
         message(STATUS "WebRTC/libdatachannel: not found, optional RTC module disabled")
+        message(STATUS "  Qt6 Multimedia      : ${HAS_MULTIMEDIA}")
+        message(STATUS "  libdatachannel      : ${LIBDATACHANNEL_AVAILABLE}")
+        message(STATUS "  Opus                : ${OPUS_AVAILABLE}")
+        message(STATUS "  OpenH264            : ${OPENH264_AVAILABLE}")
+        message(STATUS "  libyuv              : ${LIBYUV_AVAILABLE}")
     endif()
 endif()
 
@@ -195,14 +292,18 @@ endif()
 if(HAS_WEBRTC)
     list(APPEND LOCALCALL_SOURCES
         src/MdnsDiscovery.cpp
-        src/RtcSignaling.cpp
         src/RtcPeer.cpp
         src/MediaPipeline.cpp)
     list(APPEND LOCALCALL_HEADERS
         include/MdnsDiscovery.h
-        include/RtcSignaling.h
         include/RtcPeer.h
         include/MediaPipeline.h)
+endif()
+
+
+if(WIN32)
+    list(APPEND LOCALCALL_SOURCES src/WindowsRuntimeGuard.cpp)
+    list(APPEND LOCALCALL_HEADERS include/WindowsRuntimeGuard.h)
 endif()
 
 if(WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/icon.ico")
@@ -211,27 +312,68 @@ if(WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/icon.ico")
     list(APPEND LOCALCALL_SOURCES "${_RC_FILE}")
 endif()
 
-if(ANDROID)
-    qt_add_executable(LocalCall ${LOCALCALL_SOURCES} ${LOCALCALL_HEADERS})
-elseif(WIN32)
-    add_executable(LocalCall WIN32 ${LOCALCALL_SOURCES} ${LOCALCALL_HEADERS})
-else()
-    add_executable(LocalCall ${LOCALCALL_SOURCES} ${LOCALCALL_HEADERS})
+set(LOCALCALL_QT_TARGET LocalCall)
+if(WIN32)
+    # On Windows the visible LocalCall.exe is a tiny native launcher with no Qt
+    # imports. The real Qt application is LocalCallApp.exe. This prevents
+    # Windows loader entry-point popups from LocalCall.exe when stale Qt DLLs
+    # are present, and lets the launcher repair/verify the Qt runtime before
+    # starting the Qt process.
+    set(LOCALCALL_QT_TARGET LocalCallApp)
 endif()
 
-set_target_properties(LocalCall PROPERTIES
-    OUTPUT_NAME "LocalCall"
-    VERSION ${PROJECT_VERSION}
-)
+if(ANDROID)
+    qt_add_executable(${LOCALCALL_QT_TARGET} ${LOCALCALL_SOURCES} ${LOCALCALL_HEADERS})
+elseif(WIN32)
+    add_executable(${LOCALCALL_QT_TARGET} WIN32 ${LOCALCALL_SOURCES} ${LOCALCALL_HEADERS})
+else()
+    add_executable(${LOCALCALL_QT_TARGET} ${LOCALCALL_SOURCES} ${LOCALCALL_HEADERS})
+endif()
 
-target_include_directories(LocalCall PRIVATE include third_party)
+if(WIN32)
+    set_target_properties(${LOCALCALL_QT_TARGET} PROPERTIES
+        OUTPUT_NAME "LocalCallApp"
+        VERSION ${PROJECT_VERSION}
+    )
+    set(LOCALCALL_LAUNCHER_SOURCES src/WindowsLauncher.cpp)
+    if(DEFINED _RC_FILE)
+        list(APPEND LOCALCALL_LAUNCHER_SOURCES "${_RC_FILE}")
+    endif()
+    add_executable(LocalCall WIN32 ${LOCALCALL_LAUNCHER_SOURCES})
+    set_target_properties(LocalCall PROPERTIES
+        OUTPUT_NAME "LocalCall"
+        VERSION ${PROJECT_VERSION}
+    )
+    target_compile_definitions(LocalCall PRIVATE LOCALCALL_VERSION="${PROJECT_VERSION}")
+    target_link_libraries(LocalCall PRIVATE shell32)
+    add_dependencies(LocalCall ${LOCALCALL_QT_TARGET})
+else()
+    set_target_properties(${LOCALCALL_QT_TARGET} PROPERTIES
+        OUTPUT_NAME "LocalCall"
+        VERSION ${PROJECT_VERSION}
+    )
+endif()
 
-target_compile_definitions(LocalCall PRIVATE
+if(UNIX AND NOT APPLE AND NOT ANDROID)
+    set_target_properties(${LOCALCALL_QT_TARGET} PROPERTIES
+        BUILD_RPATH_USE_ORIGIN TRUE
+        INSTALL_RPATH "$ORIGIN;$ORIGIN/../${CMAKE_INSTALL_LIBDIR}"
+        INSTALL_RPATH_USE_LINK_PATH TRUE
+    )
+elseif(APPLE)
+    set_target_properties(${LOCALCALL_QT_TARGET} PROPERTIES
+        INSTALL_RPATH "@executable_path/../Frameworks;@loader_path/../Frameworks"
+    )
+endif()
+
+target_include_directories(${LOCALCALL_QT_TARGET} PRIVATE include third_party)
+
+target_compile_definitions(${LOCALCALL_QT_TARGET} PRIVATE
     LOCALCALL_VERSION="${PROJECT_VERSION}"
     LOCALCALL_PROTOCOL="localcall.v1"
 )
 
-target_link_libraries(LocalCall PRIVATE
+target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
@@ -241,48 +383,110 @@ target_link_libraries(LocalCall PRIVATE
 )
 
 if(nlohmann_json_FOUND)
-    target_link_libraries(LocalCall PRIVATE nlohmann_json::nlohmann_json)
+    target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE nlohmann_json::nlohmann_json)
 endif()
 
 if(HAS_MULTIMEDIA)
-    target_link_libraries(LocalCall PRIVATE Qt6::Multimedia)
+    target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE Qt6::Multimedia)
     if(Qt6MultimediaWidgets_FOUND)
-        target_link_libraries(LocalCall PRIVATE Qt6::MultimediaWidgets)
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE Qt6::MultimediaWidgets)
     endif()
-    target_compile_definitions(LocalCall PRIVATE HAS_MULTIMEDIA=1)
+    target_compile_definitions(${LOCALCALL_QT_TARGET} PRIVATE HAS_MULTIMEDIA=1)
 endif()
 
 if(HAS_OPENCV)
-    target_include_directories(LocalCall PRIVATE ${OpenCV_INCLUDE_DIRS})
-    target_link_libraries(LocalCall PRIVATE ${OpenCV_LIBS})
-    target_compile_definitions(LocalCall PRIVATE HAS_OPENCV=1)
+    target_include_directories(${LOCALCALL_QT_TARGET} PRIVATE ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${OpenCV_LIBS})
+    target_compile_definitions(${LOCALCALL_QT_TARGET} PRIVATE HAS_OPENCV=1)
 endif()
 
 if(HAS_WEBRTC)
-    target_link_libraries(LocalCall PRIVATE LibDataChannel::LibDataChannel Qt6::WebSockets)
-    target_compile_definitions(LocalCall PRIVATE HAS_WEBRTC=1)
-    if(OpenH264_FOUND)
-        target_link_libraries(LocalCall PRIVATE OpenH264::OpenH264)
+    if(LIBDATACHANNEL_TARGET)
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${LIBDATACHANNEL_TARGET})
+    else()
+        target_include_directories(${LOCALCALL_QT_TARGET} PRIVATE ${LIBDATACHANNEL_INCLUDE_DIR})
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${LIBDATACHANNEL_LIBRARY})
     endif()
-    if(unofficial-libopus_FOUND)
-        target_link_libraries(LocalCall PRIVATE unofficial::libopus::libopus)
-    elseif(Opus_FOUND)
-        target_link_libraries(LocalCall PRIVATE Opus::opus)
+    target_compile_definitions(${LOCALCALL_QT_TARGET} PRIVATE HAS_WEBRTC=1)
+
+    if(TARGET OpenH264::OpenH264)
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE OpenH264::OpenH264)
+    elseif(TARGET openh264::openh264)
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE openh264::openh264)
+    else()
+        target_include_directories(${LOCALCALL_QT_TARGET} PRIVATE ${OPENH264_INCLUDE_DIR})
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${OPENH264_LIBRARY})
     endif()
-    if(libyuv_FOUND)
-        target_link_libraries(LocalCall PRIVATE libyuv::libyuv)
-    elseif(unofficial-libyuv_FOUND)
-        target_link_libraries(LocalCall PRIVATE unofficial::libyuv::libyuv)
+
+    if(TARGET Opus::opus)
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE Opus::opus)
+    else()
+        target_include_directories(${LOCALCALL_QT_TARGET} PRIVATE ${OPUS_INCLUDE_DIR})
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${OPUS_LIBRARY})
+    endif()
+
+    if(TARGET libyuv::libyuv)
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE libyuv::libyuv)
+    elseif(TARGET unofficial::libyuv::libyuv)
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE unofficial::libyuv::libyuv)
+    elseif(TARGET yuv)
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE yuv)
+    else()
+        target_include_directories(${LOCALCALL_QT_TARGET} PRIVATE ${LIBYUV_INCLUDE_DIR})
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${LIBYUV_LIBRARY})
     endif()
 endif()
 
 if(WIN32)
-    target_link_libraries(LocalCall PRIVATE ws2_32 dwmapi)
-    set_target_properties(LocalCall PROPERTIES WIN32_EXECUTABLE TRUE)
+    target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ws2_32 dwmapi)
+    # Do NOT delay-load Qt DLLs. Qt exports several data symbols such as
+    # QAbstractButton::staticMetaObject, and MSVC cannot delay-load a DLL when
+    # the executable imports data symbols from it. Attempting to delay-load
+    # Qt6Widgets.dll causes LNK1194. Runtime consistency is handled by deploying
+    # the exact Qt DLLs beside the executable and by the Windows run/deploy scripts.
+    set_target_properties(${LOCALCALL_QT_TARGET} PROPERTIES WIN32_EXECUTABLE TRUE)
+
+    get_target_property(_qt_qmake_for_debug Qt6::qmake IMPORTED_LOCATION)
+    if(_qt_qmake_for_debug)
+        get_filename_component(_qt_bin_dir_for_debug "${_qt_qmake_for_debug}" DIRECTORY)
+        # Visual Studio F5 debugging should also prefer the app folder and the
+        # exact Qt kit used at configure time. This does not affect installed
+        # packages, but avoids accidentally loading another Qt from PATH.
+        set_target_properties(${LOCALCALL_QT_TARGET} PROPERTIES
+            VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:${LOCALCALL_QT_TARGET}>"
+            VS_DEBUGGER_ENVIRONMENT "PATH=$<TARGET_FILE_DIR:${LOCALCALL_QT_TARGET}>;${_qt_bin_dir_for_debug};%PATH%;QT_PLUGIN_PATH=$<TARGET_FILE_DIR:${LOCALCALL_QT_TARGET}>;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:${LOCALCALL_QT_TARGET}>/platforms")
+    endif()
+
+    if(LOCALCALL_POST_BUILD_DEPLOY_QT)
+        get_target_property(_qt_qmake_executable Qt6::qmake IMPORTED_LOCATION)
+        if(_qt_qmake_executable)
+            get_filename_component(_qt_bin_dir "${_qt_qmake_executable}" DIRECTORY)
+            find_program(LOCALCALL_WINDEPLOYQT_EXECUTABLE
+                NAMES windeployqt windeployqt.exe
+                HINTS "${_qt_bin_dir}"
+                NO_DEFAULT_PATH)
+            if(LOCALCALL_WINDEPLOYQT_EXECUTABLE)
+                add_custom_command(TARGET ${LOCALCALL_QT_TARGET} POST_BUILD
+                    COMMAND "${CMAKE_COMMAND}"
+                        "-DLOCALCALL_TARGET_FILE=$<TARGET_FILE:${LOCALCALL_QT_TARGET}>"
+                        "-DLOCALCALL_TARGET_DIR=$<TARGET_FILE_DIR:${LOCALCALL_QT_TARGET}>"
+                        "-DLOCALCALL_QT_BIN_DIR=${_qt_bin_dir}"
+                        "-DLOCALCALL_WINDEPLOYQT=${LOCALCALL_WINDEPLOYQT_EXECUTABLE}"
+                        "-DLOCALCALL_CONFIG=$<CONFIG>"
+                        -P "${CMAKE_SOURCE_DIR}/cmake/deploy_windows_qt.cmake"
+                    COMMENT "Deploying matching Qt runtime next to LocalCall.exe"
+                    VERBATIM)
+            else()
+                message(WARNING "LOCALCALL_POST_BUILD_DEPLOY_QT is ON, but matching windeployqt was not found in ${_qt_bin_dir}")
+            endif()
+        else()
+            message(WARNING "LOCALCALL_POST_BUILD_DEPLOY_QT is ON, but Qt6::qmake was not available")
+        endif()
+    endif()
 endif()
 
 if(APPLE)
-    set_target_properties(LocalCall PROPERTIES
+    set_target_properties(${LOCALCALL_QT_TARGET} PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_BUNDLE_NAME "Local Call"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.localcall.LocalCall"
@@ -292,17 +496,27 @@ if(APPLE)
 endif()
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/icon.ico")
-    add_custom_command(TARGET LocalCall POST_BUILD
+    add_custom_command(TARGET ${LOCALCALL_QT_TARGET} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${CMAKE_SOURCE_DIR}/icon.ico"
-                "$<TARGET_FILE_DIR:LocalCall>/icon.ico"
-        COMMENT "Copying icon.ico next to executable")
+                "$<TARGET_FILE_DIR:${LOCALCALL_QT_TARGET}>/icon.ico"
+        COMMENT "Copying icon.ico next to Qt app")
+    if(WIN32 AND TARGET LocalCall)
+        add_custom_command(TARGET LocalCall POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${CMAKE_SOURCE_DIR}/icon.ico"
+                    "$<TARGET_FILE_DIR:LocalCall>/icon.ico"
+            COMMENT "Copying icon.ico next to launcher")
+    endif()
 endif()
 
-install(TARGETS LocalCall
+install(TARGETS ${LOCALCALL_QT_TARGET}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     BUNDLE  DESTINATION .
 )
+if(WIN32 AND TARGET LocalCall)
+    install(TARGETS LocalCall RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 
 if(UNIX AND NOT APPLE AND NOT ANDROID AND LOCALCALL_INSTALL_DESKTOP_FILE)
     if(EXISTS "${CMAKE_SOURCE_DIR}/packaging/linux/localcall.desktop")
@@ -316,6 +530,33 @@ if(UNIX AND NOT APPLE AND NOT ANDROID AND LOCALCALL_INSTALL_DESKTOP_FILE)
     endif()
 endif()
 
+if(LOCALCALL_INSTALL_QT_RUNTIME)
+    if(COMMAND qt_generate_deploy_app_script)
+        qt_generate_deploy_app_script(
+            TARGET ${LOCALCALL_QT_TARGET}
+            OUTPUT_SCRIPT LOCALCALL_QT_DEPLOY_SCRIPT
+            NO_TRANSLATIONS
+            NO_UNSUPPORTED_PLATFORM_ERROR
+        )
+        install(SCRIPT ${LOCALCALL_QT_DEPLOY_SCRIPT})
+    else()
+        message(WARNING "Qt CMake deployment API is unavailable. Use scripts/deploy-windows.ps1, windeployqt, macdeployqt, or distro packaging manually.")
+    endif()
+endif()
+
+set(CPACK_PACKAGE_NAME "LocalCall")
+set(CPACK_PACKAGE_VENDOR "Local Call Project")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Low-latency secure local and internet calling app")
+if(WIN32)
+    set(CPACK_GENERATOR "ZIP")
+elseif(APPLE)
+    set(CPACK_GENERATOR "DragNDrop;ZIP")
+else()
+    set(CPACK_GENERATOR "TGZ;ZIP")
+endif()
+include(CPack)
+
 message(STATUS "")
 message(STATUS "=== Local Call build configuration ===")
 message(STATUS "  Version       : ${PROJECT_VERSION}")
@@ -323,4 +564,6 @@ message(STATUS "  Platform      : ${CMAKE_SYSTEM_NAME}")
 message(STATUS "  Qt Multimedia : ${HAS_MULTIMEDIA}")
 message(STATUS "  OpenCV        : ${HAS_OPENCV}")
 message(STATUS "  WebRTC P2P    : ${HAS_WEBRTC}")
+message(STATUS "  Qt install deploy : ${LOCALCALL_INSTALL_QT_RUNTIME}")
+message(STATUS "  Win post-build Qt deploy : ${LOCALCALL_POST_BUILD_DEPLOY_QT}")
 message(STATUS "======================================")

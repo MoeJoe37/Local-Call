@@ -50,7 +50,7 @@ bool VideoEncoderWorker::init()
     layer.iVideoHeight            = m_settings.height;
     layer.fFrameRate              = m_settings.fps;
     layer.iSpatialBitrate         = m_settings.bitrate;
-    layer.uiProfileIdc            = PRO_CONSTRAINED_BASELINE;
+    layer.uiProfileIdc            = PRO_BASELINE;
     layer.uiLevelIdc              = LEVEL_3_1;
     layer.iDLayerQp               = 0;
     layer.sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
@@ -115,21 +115,11 @@ QByteArray VideoEncoderWorker::convertToI420(const QVideoFrame& frame)
                             dstU, w / 2,
                             dstV, w / 2,
                             w, h);
-    } else if (fmt == Fmt::Format_BGRA8888 || fmt == Fmt::Format_BGR32) {
-        const uint8_t* src = frame.bits(0);
-        libyuv::ARGBToI420(src, frame.bytesPerLine(0),
-                            dstY, w,
-                            dstU, w / 2,
-                            dstV, w / 2,
-                            w, h);
-    } else if (fmt == Fmt::Format_RGBA8888 || fmt == Fmt::Format_RGB32) {
-        const uint8_t* src = frame.bits(0);
-        libyuv::ABGRToI420(src, frame.bytesPerLine(0),
-                            dstY, w,
-                            dstU, w / 2,
-                            dstV, w / 2,
-                            w, h);
     } else {
+        // Keep this branch enum-safe across Qt 6.x builds. Qt has changed
+        // QVideoFrameFormat pixel-format names over time, so convert unknown
+        // RGB/BGR packed formats through QImage instead of referencing optional
+        // enum names such as Format_BGR32/Format_RGB32.
         QImage img = frame.toImage().convertToFormat(QImage::Format_ARGB32);
         libyuv::ARGBToI420(img.constBits(), img.bytesPerLine(),
                             dstY, w,
@@ -210,7 +200,7 @@ bool VideoDecoderWorker::init()
 
     SDecodingParam dParam;
     std::memset(&dParam, 0, sizeof(dParam));
-    dParam.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_AUTO;
+    dParam.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
     dParam.bParseOnly                  = false;
 
     if (m_dec->Initialize(&dParam) != 0) {
@@ -325,7 +315,11 @@ bool MediaPipeline::startCapture()
     // single-sink and low-latency across Qt backends.
     m_camera->start();
 
-    if (!initAudioEncoder()) return false;
+    if (!initAudioEncoder()) {
+        m_capturing = true;
+        stopCapture();
+        return false;
+    }
 
     m_capturing = true;
     return true;
@@ -336,7 +330,15 @@ void MediaPipeline::stopCapture()
     if (!m_capturing) return;
     m_capturing = false;
 
-    if (m_camera) { m_camera->stop(); }
+    if (m_camera) {
+        m_camera->stop();
+        m_camera->deleteLater();
+        m_camera = nullptr;
+    }
+    if (m_captureSession) {
+        m_captureSession->deleteLater();
+        m_captureSession = nullptr;
+    }
 
     cleanupAudio();
 
@@ -410,10 +412,18 @@ bool MediaPipeline::initAudioEncoder()
 
 void MediaPipeline::cleanupAudio()
 {
-    if (m_audioSrc) { m_audioSrc->stop(); m_audioSrc = nullptr; }
+    if (m_audioSrc) {
+        m_audioSrc->stop();
+        m_audioSrc->deleteLater();
+        m_audioSrc = nullptr;
+    }
     m_audioDevice = nullptr;
 
-    if (m_audioSink) { m_audioSink->stop(); m_audioSink = nullptr; }
+    if (m_audioSink) {
+        m_audioSink->stop();
+        m_audioSink->deleteLater();
+        m_audioSink = nullptr;
+    }
     m_audioOut = nullptr;
 
     {

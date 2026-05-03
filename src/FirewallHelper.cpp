@@ -14,7 +14,7 @@ namespace FirewallHelper {
 // ── Windows implementation ────────────────────────────────────────────────────
 #ifdef Q_OS_WIN
 
-static const QString APP_NAME = "Local Call";
+static QString appName() { return QStringLiteral("Local Call"); }
 
 static void netsh(const QString& args)
 {
@@ -42,9 +42,9 @@ static bool rulesExist()
 {
     QProcess p;
     p.start("netsh", {"advfirewall", "firewall", "show", "rule",
-                      QString("name=\"%1 Audio In\"").arg(APP_NAME)});
+                      QString("name=\"%1 Audio In\"").arg(appName())});
     p.waitForFinished(3000);
-    return p.readAllStandardOutput().contains(APP_NAME.toUtf8());
+    return p.readAllStandardOutput().contains(appName().toUtf8());
 }
 
 static bool isElevated()
@@ -68,14 +68,14 @@ static void addRules()
     QString ap = QString::number(MediaSettings::MediaAudioPort);
     QString vp = QString::number(MediaSettings::MediaVideoPort);
 
-    rm(APP_NAME + " UDP");      add(APP_NAME + " UDP",      "UDP", "in",  bp);
-    rm(APP_NAME + " UDP Out");  add(APP_NAME + " UDP Out",  "UDP", "out", bp);
-    rm(APP_NAME + " TCP");      add(APP_NAME + " TCP",      "TCP", "in",  sp);
-    rm(APP_NAME + " TCP Out");  add(APP_NAME + " TCP Out",  "TCP", "out", sp);
-    rm(APP_NAME + " Audio In"); add(APP_NAME + " Audio In", "UDP", "in",  ap);
-    rm(APP_NAME + " Audio Out");add(APP_NAME + " Audio Out","UDP", "out", ap);
-    rm(APP_NAME + " Video In"); add(APP_NAME + " Video In", "UDP", "in",  vp);
-    rm(APP_NAME + " Video Out");add(APP_NAME + " Video Out","UDP", "out", vp);
+    rm(appName() + " UDP");      add(appName() + " UDP",      "UDP", "in",  bp);
+    rm(appName() + " UDP Out");  add(appName() + " UDP Out",  "UDP", "out", bp);
+    rm(appName() + " TCP");      add(appName() + " TCP",      "TCP", "in",  sp);
+    rm(appName() + " TCP Out");  add(appName() + " TCP Out",  "TCP", "out", sp);
+    rm(appName() + " Audio In"); add(appName() + " Audio In", "UDP", "in",  ap);
+    rm(appName() + " Audio Out");add(appName() + " Audio Out","UDP", "out", ap);
+    rm(appName() + " Video In"); add(appName() + " Video In", "UDP", "in",  vp);
+    rm(appName() + " Video Out");add(appName() + " Video Out","UDP", "out", vp);
 }
 
 static void elevateAndAdd()

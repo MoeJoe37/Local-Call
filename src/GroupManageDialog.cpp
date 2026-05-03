@@ -14,7 +14,7 @@ using json = nlohmann::json;
 #include <QFrame>
 #include <algorithm>
 
-static const QString BASE_SS = R"(
+static constexpr const char* BASE_SS = R"(
     QDialog    { background: #1E1E2E; }
     QLabel     { color: #CDD6F4; font-size: 13px; }
     QScrollArea { background: #181825; border: none; }

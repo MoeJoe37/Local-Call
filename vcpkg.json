@@ -1,11 +1,12 @@
 {
   "name": "localcall",
-  "version-string": "1.2.0",
+  "version-string": "2.0.13",
   "dependencies": [
     "nlohmann-json",
     "libdatachannel",
-    "libopus",
+    "opus",
     "openh264",
-    "libyuv"
+    "libyuv",
+    "openssl"
   ]
 }

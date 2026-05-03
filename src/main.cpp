@@ -7,9 +7,16 @@
 #include "MainWindow.h"
 #include "FirewallHelper.h"
 #include "SigMsg.h"
+#include "WindowsRuntimeGuard.h"
 
 int main(int argc, char* argv[])
 {
+#ifdef _WIN32
+    if (!localcall_prepare_windows_runtime()) {
+        return 127;
+    }
+#endif
+
     // High-DPI: must be set before QApplication on Qt 5
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
@@ -19,7 +26,7 @@ int main(int argc, char* argv[])
     QApplication app(argc, argv);
     app.setApplicationName("LocalCall");
     app.setOrganizationName("LocalCall");
-    app.setApplicationVersion("1.0");
+    app.setApplicationVersion(LOCALCALL_VERSION);
     app.setQuitOnLastWindowClosed(true);
 
     // Register custom types used in cross-thread signals (queued connections).

@@ -4,10 +4,30 @@ Local Call is a Qt/C++ peer-to-peer communication app for LAN chat, friend reque
 
 This package updates the previous build into a **secure RTC-first** version. The old raw UDP call path is kept only as a compatibility fallback when WebRTC dependencies are unavailable.
 
-## What Changed in Version 2.0.0
+## What Changed in Version 2.0.13
+
+### v2.0.13 Windows launcher runtime fix
+
+Windows builds now produce two executables:
+
+- `LocalCall.exe` — a native launcher with no Qt imports. Run this file.
+- `LocalCallApp.exe` — the real Qt application. Do not run this directly.
+
+The launcher repairs stale Qt DLLs from `localcall-qt-prefix.txt`, prepares the DLL/plugin search path, smoke-loads Qt from the deployed folder, and then starts `LocalCallApp.exe`. This prevents the repeated Windows loader entry-point popups that appeared for different Qt Widgets methods when an old MinGW/old-version `Qt6Widgets.dll` was loaded.
+
+
+### Runtime Fixes in 2.0.13
+
+- Windows post-build Qt deployment is now enabled by default, so a normal `cmake --build` deploys the matching Qt runtime beside `LocalCall.exe`.
+- `scripts/deploy-windows.ps1` now deletes stale Qt DLLs/plugins, runs the exact `windeployqt.exe` from the Qt kit passed to CMake, writes `qt.conf`, and verifies every deployed `Qt6*.dll` by SHA-256 hash against the selected Qt kit.
+- Added `scripts/check-windows-runtime.ps1` to detect Qt DLL mismatches before launching.
+- Added `scripts/run-windows.ps1` to run the app with the deployed folder and selected Qt kit first in `PATH`.
+
+If Windows shows `Entry Point Not Found` for a Qt symbol such as `QSlider`, delete the entire `build` folder and use the clean commands below.
+
 
 - Added **WebRTC/libdatachannel-first calls** using ICE + STUN/TURN-capable negotiation.
-- Added **encrypted media transport** through WebRTC DTLS-SRTP.
+- Added **encrypted media transport** through WebRTC ICE/DTLS DataChannels.
 - Added persistent **Ed25519 device identity** using OpenSSL.
 - Added signed critical signaling for friend requests, call invites, call accept/end, SDP offers/answers, and ICE candidates.
 - Added fingerprint pinning fields to saved friends and pending requests.
@@ -21,11 +41,18 @@ This package updates the previous build into a **secure RTC-first** version. The
 - Updated Fedora/Nobara/Bazzite, Arch, and NixOS dependency paths.
 - Preserved the original length-prefixed JSON framing so older Local Call builds can still understand non-RTC events.
 
+
+### Build Fixes in 2.0.13
+
+- Removed the invalid `rtc/opusrtpdepacketizer.hpp` include and now uses `rtc/rtpdepacketizer.hpp`, which provides `rtc::OpusRtpDepacketizer`.
+- Replaced unsupported OpenH264 symbols with portable ones used by current OpenH264 headers: `PRO_BASELINE` and `VIDEO_BITSTREAM_DEFAULT`.
+- Replaced non-portable libdatachannel RTP helper classes with stable low-latency DataChannels and Local Call frame chunking.
+
 ## Security / Network Capability Matrix
 
 | Capability | Secure WebRTC path | Legacy raw UDP fallback |
 |---|---:|---:|
-| End-to-end encrypted call media | Yes, DTLS-SRTP | No |
+| End-to-end encrypted call media | Yes, DTLS/SCTP | No |
 | User/device authentication | Yes, Ed25519 signed critical signaling | No |
 | NAT traversal | Yes, ICE with STUN/TURN configuration | No |
 | Internet calling | Yes, when peers can exchange signaling and ICE succeeds; TURN may be required on strict NATs | No |
@@ -106,7 +133,7 @@ Required:
 Recommended for secure calls:
 
 - Qt 6 Multimedia
-- Qt 6 WebSockets
+- Qt WebSockets is not required by the default build
 - libdatachannel
 - OpenH264
 - Opus
@@ -124,7 +151,7 @@ Optional fallback video/screen-share:
 ./build/LocalCall
 ```
 
-If optional WebRTC packages are missing:
+If you intentionally want the legacy LAN-only fallback:
 
 ```bash
 LOCALCALL_WITH_WEBRTC=OFF ./scripts/build-linux.sh
@@ -176,19 +203,47 @@ Install:
 
 - Visual Studio 2022 Build Tools
 - CMake
-- Qt 6 MSVC 2022 64-bit kit
-- Qt Multimedia
-- OpenSSL
-- libdatachannel/OpenH264/Opus/libyuv through vcpkg or another CMake-compatible package source
+- Qt 6 MSVC 2022 64-bit kit, including Qt Multimedia
+- vcpkg at `C:\vcpkg`
 
-Then:
+Recommended command:
 
 ```powershell
-cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.11.0/msvc2022_64" -DLOCALCALL_WITH_WEBRTC=AUTO
+.\scripts\build-windows.ps1 -QtDir "C:/Qt/6.11.0/msvc2022_64" -VcpkgRoot "C:/vcpkg" -Clean
+.\build\Release\LocalCall.exe
+```
+
+Manual command:
+
+```powershell
+Remove-Item -Recurse -Force build -ErrorAction SilentlyContinue
+cmake -S . -B build `
+  -G "Visual Studio 17 2022" -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+  -DCMAKE_PREFIX_PATH="C:/Qt/6.11.0/msvc2022_64" `
+  -DLOCALCALL_POST_BUILD_DEPLOY_QT=ON `
+  -DLOCALCALL_WITH_WEBRTC=ON
 cmake --build build --config Release
-cd build\Release
-windeployqt --release LocalCall.exe
-LocalCall.exe
+.\scripts\deploy-windows.ps1 -BuildDir build -Config Release -QtDir "C:/Qt/6.11.0/msvc2022_64" -Clean
+.\build\Release\LocalCall.exe
+```
+
+Do **not** run a random `windeployqt` from `PATH`. `LocalCall.exe - Entry Point Not Found` almost always means the executable was linked against one Qt build but is loading different `Qt6*.dll` files at runtime. The build/deploy scripts use the `windeployqt.exe` from the same Qt kit passed in `CMAKE_PREFIX_PATH`.
+
+
+### Windows post-build deploy error fix
+
+If MSBuild prints `Target executable does not exist: ".../build/Release/LocalCall.exe"`, you are seeing a generator quoting issue in the deploy step. Version 2.0.13 fixes it by normalizing quoted paths inside `cmake/deploy_windows_qt.cmake`. A safe manual fallback is:
+
+```powershell
+cmake -S . -B build `
+  -G "Visual Studio 17 2022" -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+  -DCMAKE_PREFIX_PATH="C:/Qt/6.11.0/msvc2022_64" `
+  -DLOCALCALL_WITH_WEBRTC=ON `
+  -DLOCALCALL_POST_BUILD_DEPLOY_QT=ON
+cmake --build build --config Release
+.\scripts\deploy-windows.ps1 -BuildDir build -Config Release -QtDir "C:/Qt/6.11.0/msvc2022_64" -Clean
 ```
 
 ## CMake Options
@@ -196,7 +251,9 @@ LocalCall.exe
 ```bash
 -DLOCALCALL_WITH_MULTIMEDIA=ON|OFF
 -DLOCALCALL_WITH_OPENCV=AUTO|ON|OFF
--DLOCALCALL_WITH_WEBRTC=AUTO|ON|OFF
+-DLOCALCALL_WITH_WEBRTC=ON|AUTO|OFF
+-DLOCALCALL_INSTALL_QT_RUNTIME=ON|OFF
+-DLOCALCALL_POST_BUILD_DEPLOY_QT=ON|OFF
 ```
 
 Examples:
@@ -217,13 +274,27 @@ On trusted LANs only:
 ./scripts/open-firewall-linux.sh
 ```
 
-## Install on Linux
+## Install / Deploy on Linux
 
 ```bash
-cmake --install build --prefix "$HOME/.local"
+./scripts/deploy-linux.sh
 ```
 
-This installs the binary plus a desktop launcher/icon when supported.
+This runs `cmake --install` into `dist/LocalCall`. The installed executable uses relative RPATH so bundled libraries can be found next to the app when Qt's deployment script copies them. For real distribution across Fedora/Nobara/Bazzite/Arch/NixOS, use the install tree as the input to an AppImage or Flatpak package, or build native packages per distro.
+
+Manual equivalent:
+
+```bash
+cmake --install build --prefix "$PWD/dist/LocalCall"
+```
+
+## Deploy on macOS
+
+```bash
+./scripts/deploy-macos.sh
+```
+
+The Qt CMake deployment script uses macOS bundle deployment when supported by the host Qt installation.
 
 ## Project Structure
 
@@ -240,9 +311,46 @@ LocalCall/
 └── third_party/nlohmann/json.hpp
 ```
 
+## Runtime Deployment Troubleshooting
+
+See `docs/RUNTIME_DEPLOYMENT.md` for the Qt DLL/shared-library mismatch RCA and the correct deployment commands.
+
 ## Notes
 
 - The secure low-latency path depends on WebRTC dependencies being found at build time.
 - TURN can make internet calling work behind strict NATs, but direct peer-to-peer ICE is preferred for latency.
 - Legacy clients can still use non-RTC LAN events, but secure calls require the new v2 WebRTC signaling.
 - The app is inspired by Matrix design ideas such as versioned events and extensible JSON envelopes, but it is not a Matrix client and does not federate with Matrix homeservers.
+
+### Build note for v2.0.13
+
+v2.0.13 removes use of libdatachannel's non-portable RTP helper classes and uses stable WebRTC DataChannels for the encrypted low-latency media payload tunnel. This fixes MSVC/vcpkg errors such as `RtpPacketizationConfig is not a member of rtc`, `H264RtpPacketizer is not a member of rtc`, and `RtcpNackResponder is not a member of rtc`.
+
+
+### Recommended Windows run command
+
+```powershell
+.\scripts\run-windows.ps1 `
+  -BuildDir build `
+  -Config Release `
+  -QtDir "C:/Qt/6.11.0/msvc2022_64"
+```
+
+### v2.0.13 configure fix
+
+Fixed a CMake configure error on Windows caused by a backslash in the `LOCALCALL_POST_BUILD_DEPLOY_QT` option description. The project now uses forward slashes in CMake strings so CMake does not parse `\R` as an invalid escape sequence.
+
+
+## Windows QSlider entry-point repair
+
+If the app builds but shows `??1QSlider@@UEAA@XZ could not be located` at launch, the executable is loading stale Qt DLLs. Run:
+
+```powershell
+.\scripts\fix-windows-entrypoint.ps1 -QtDir "C:/Qt/6.11.0/msvc2022_64" -VcpkgRoot "C:/vcpkg" -Rebuild
+```
+
+The script redeploys Qt from the selected kit and verifies the copied Qt DLL/plugin hashes before launching.
+
+### v2.0.13 Windows entry-point hardening
+
+This release removes `QSlider` from the call UI and replaces it with a quality dropdown. This prevents `QSlider`-specific Qt entry-point errors such as `??1QSlider...` or `?paintEvent@QSlider...` when an old Qt DLL is accidentally loaded. The Windows repair script now checks that the rebuilt EXE no longer contains `QSlider` references and validates both `build/Release` and `dist/LocalCall-Windows-x64`.

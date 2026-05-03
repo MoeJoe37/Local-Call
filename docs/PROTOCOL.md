@@ -12,7 +12,7 @@ Inspired by Matrix-style communication design, Local Call treats each network ac
 - **Forward compatibility:** unknown JSON fields must be ignored by receivers.
 - **Backward compatibility:** the framing stayed the same as older Local Call builds.
 - **Security extension:** critical v2 call events include an Ed25519 public key, fingerprint, and signature.
-- **Low-latency RTC:** media uses WebRTC ICE + DTLS-SRTP instead of raw app UDP when available.
+- **Low-latency RTC:** media uses WebRTC ICE + DTLS/SCTP DataChannels instead of raw app UDP when available.
 
 Local Call is not a Matrix client and does not federate with Matrix homeservers. The inspiration is architectural: versioned JSON events, extensibility, and user-controlled communication.
 
@@ -34,7 +34,7 @@ New builds may send these metadata fields:
 {
   "protocol": "localcall.v1",
   "schema": 1,
-  "app_version": "2.0.0",
+  "app_version": "2.0.13",
   "platform": "linux",
   "type": "chat_text",
   "from_id": "abcd1234",
@@ -123,3 +123,12 @@ Any future protocol change must follow this rule:
 4. Keep old event `type` names alive or provide a translation layer.
 5. Keep payload size limits on every receiver.
 6. Sign new critical trust/call events before sending.
+
+## v2.0.13 transport correction
+
+The libdatachannel build distributed by vcpkg exposes the stable WebRTC DataChannel API but does not expose the experimental RTP packetizer helper classes that earlier drafts attempted to use. Local Call v2.0.13 therefore transports encoded Opus and H.264 payloads through two low-latency WebRTC DataChannels:
+
+- `localcall-audio`
+- `localcall-video`
+
+Both channels are configured as unordered with `maxRetransmits = 0` to prioritize fresh audio/video over delayed delivery. Payloads are chunked with a small Local Call frame header, reassembled by frame id, and stale incomplete frames are discarded. This keeps the secure ICE/DTLS WebRTC path while avoiding non-portable libdatachannel RTP helper APIs.

@@ -15,7 +15,6 @@ using json = nlohmann::json;
 #include <QAtomicInt>
 #include <algorithm>
 
-const QString PeerDiscovery::MulticastGroup = "239.255.42.99";
 
 PeerDiscovery::PeerDiscovery(const QString& myId, const QString& myName, QObject* parent)
     : QObject(parent), m_myId(myId), m_myName(myName)

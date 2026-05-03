@@ -11,7 +11,7 @@
       packages = forAllSystems (pkgs: {
         default = pkgs.stdenv.mkDerivation {
           pname = "localcall";
-          version = "2.0.0";
+          version = "2.0.13";
           src = ./.;
 
           nativeBuildInputs = with pkgs; [
@@ -35,7 +35,7 @@
           ];
 
           cmakeFlags = [
-            "-DLOCALCALL_WITH_WEBRTC=AUTO"
+            "-DLOCALCALL_WITH_WEBRTC=ON"
             "-DLOCALCALL_WITH_OPENCV=AUTO"
             "-DLOCALCALL_WITH_MULTIMEDIA=ON"
           ];

@@ -52,5 +52,5 @@ private:
     QMap<QString, PeerInfo> m_peers;
     std::atomic<bool>       m_running{false};
 
-    static const QString MulticastGroup;
+    static constexpr const char* MulticastGroup = "239.255.42.99";
 };

@@ -48,7 +48,7 @@ using json = nlohmann::json;
 
 // ── Stylesheet ────────────────────────────────────────────────────────────────
 // Updated to match the new chat UI style (lavender #CBA6F7 accent, Catppuccin Mocha)
-static const QString APP_STYLE = R"(
+static constexpr const char* APP_STYLE = R"(
 QMainWindow, QWidget { background: #1E1E2E; color: #CDD6F4; font-size: 13px; }
 QSplitter::handle { background: #313244; width: 1px; }
 

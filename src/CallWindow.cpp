@@ -8,7 +8,6 @@
 #include <QPushButton>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QSlider>
 #include <QCloseEvent>
 #include <QTimer>
 #include <QPixmap>
@@ -146,11 +145,12 @@ CallWindow::CallWindow(const QString& peerIp, const QString& peerName,
 
     auto* lblQ = new QLabel("Bitrate bias:", m_qualityPanel);
     lblQ->setStyleSheet("color:#A6ADC8;font-size:11px;");
-    m_sldQuality = new QSlider(Qt::Horizontal, m_qualityPanel);
-    m_sldQuality->setRange(10, 100);
-    m_sldQuality->setValue(55);
-    m_sldQuality->setFixedWidth(90);
-    m_lblQuality = new QLabel("55", m_qualityPanel);
+    m_cmbQuality = new QComboBox(m_qualityPanel);
+    m_cmbQuality->setStyleSheet("background:#313244;color:#CDD6F4;border:none;border-radius:3px;padding:2px 6px;font-size:11px;");
+    for (int q = 10; q <= 100; q += 10)
+        m_cmbQuality->addItem(QString::number(q), q);
+    m_cmbQuality->setCurrentText("60");
+    m_lblQuality = new QLabel("60", m_qualityPanel);
     m_lblQuality->setStyleSheet("color:#CDD6F4;font-size:11px;min-width:24px;");
 
     qRow->addWidget(lblRes);
@@ -158,7 +158,7 @@ CallWindow::CallWindow(const QString& peerIp, const QString& peerName,
     qRow->addWidget(lblFps);
     qRow->addWidget(m_cmbFps);
     qRow->addWidget(lblQ);
-    qRow->addWidget(m_sldQuality);
+    qRow->addWidget(m_cmbQuality);
     qRow->addWidget(m_lblQuality);
     qRow->addStretch();
     m_qualityPanel->setVisible(mode != CallMode::Voice);
@@ -191,8 +191,8 @@ CallWindow::CallWindow(const QString& peerIp, const QString& peerName,
     connect(m_chkScreenAudio, &QCheckBox::stateChanged,  this, &CallWindow::onScreenAudioChanged);
     connect(m_cmbRes,  QOverload<int>::of(&QComboBox::currentIndexChanged), this, &CallWindow::onQualityChanged);
     connect(m_cmbFps,  QOverload<int>::of(&QComboBox::currentIndexChanged), this, &CallWindow::onQualityChanged);
-    connect(m_sldQuality, &QSlider::valueChanged, this, [this](int v){
-        m_lblQuality->setText(QString::number(v));
+    connect(m_cmbQuality, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int){
+        if (m_lblQuality) m_lblQuality->setText(m_cmbQuality->currentText());
         onQualityChanged();
     });
 
@@ -231,7 +231,7 @@ SigMsg CallWindow::makeRtcSignal(const std::string& type) const
 
 void CallWindow::onQualityChanged()
 {
-    if (m_lblQuality) m_lblQuality->setText(QString::number(m_sldQuality->value()));
+    if (m_lblQuality && m_cmbQuality) m_lblQuality->setText(m_cmbQuality->currentText());
 #if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
     if (!m_videoSender) return;
 
@@ -248,7 +248,7 @@ void CallWindow::onQualityChanged()
     if (fpsStr == "Source") m_videoSender->targetFps = 999;
     else                    m_videoSender->targetFps = fpsStr.toInt();
 
-    m_videoSender->jpegQuality.store(m_sldQuality->value());
+    m_videoSender->jpegQuality.store(m_cmbQuality ? m_cmbQuality->currentData().toInt() : 60);
 #endif
 }
 

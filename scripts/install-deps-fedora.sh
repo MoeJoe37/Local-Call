@@ -8,7 +8,7 @@ set -euo pipefail
 
 packages=(
   gcc-c++ cmake ninja-build pkgconf-pkg-config git zip
-  qt6-qtbase-devel qt6-qtmultimedia-devel qt6-qtwebsockets-devel
+  qt6-qtbase-devel qt6-qtmultimedia-devel
   opencv-devel nlohmann-json-devel openssl-devel
   opus-devel openh264-devel libyuv-devel libdatachannel-devel
 )
