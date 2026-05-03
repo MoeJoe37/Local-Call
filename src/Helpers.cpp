@@ -5,6 +5,11 @@ using json = nlohmann::json;
 #include <QAbstractSocket>
 #include <QUdpSocket>
 #include <QHostAddress>
+#include <QDir>
+#include <QFileInfo>
+#include <QSaveFile>
+#include <QStandardPaths>
+#include <QStringList>
 #include <chrono>
 #include <random>
 #include <sstream>
@@ -30,41 +35,76 @@ std::string getFunnyName() {
     return std::string(adjectives[adjDist(rng)]) + " " + nouns[nounDist(rng)];
 }
 
+static bool isProbablyVirtualInterface(const QNetworkInterface& iface) {
+    const QString name = (iface.name() + " " + iface.humanReadableName()).toLower();
+    const QStringList deny = {
+        "docker", "veth", "br-", "virbr", "vmnet", "vbox", "virtualbox",
+        "hyper-v", "zerotier", "tailscale", "tun", "tap", "wg", "hamachi"
+    };
+    for (const auto& token : deny) {
+        if (name.contains(token)) return true;
+    }
+    return false;
+}
+
+static bool isPrivateIPv4(const QHostAddress& a) {
+    quint32 ip = a.toIPv4Address();
+    return (ip >> 24) == 10 ||
+           (ip >> 20) == (172u * 4096 + 16) ||
+           (ip >> 16) == (192u * 256 + 168) ||
+           (ip >> 16) == (169u * 256 + 254); // link-local fallback
+}
+
+std::vector<std::string> localIPv4Addresses(bool includeLoopback) {
+    struct Candidate { QHostAddress ip; int score; };
+    std::vector<Candidate> candidates;
+
+    for (const auto& iface : QNetworkInterface::allInterfaces()) {
+        const auto flags = iface.flags();
+        if (!(flags & QNetworkInterface::IsUp) || !(flags & QNetworkInterface::IsRunning)) continue;
+        if ((flags & QNetworkInterface::IsLoopBack) && !includeLoopback) continue;
+
+        int ifaceScore = 0;
+        if (flags & QNetworkInterface::CanBroadcast) ifaceScore += 20;
+        if (flags & QNetworkInterface::CanMulticast) ifaceScore += 10;
+        if (isProbablyVirtualInterface(iface)) ifaceScore -= 50;
+
+        for (const auto& entry : iface.addressEntries()) {
+            if (entry.ip().protocol() != QAbstractSocket::IPv4Protocol) continue;
+            if (entry.ip().isLoopback() && !includeLoopback) continue;
+            int score = ifaceScore;
+            if (isPrivateIPv4(entry.ip())) score += 40;
+            if (!entry.broadcast().isNull()) score += 10;
+            candidates.push_back({entry.ip(), score});
+        }
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+        return a.score > b.score;
+    });
+
+    std::vector<std::string> out;
+    for (const auto& c : candidates) {
+        const auto ip = c.ip.toString().toStdString();
+        if (std::find(out.begin(), out.end(), ip) == out.end()) out.push_back(ip);
+    }
+    return out;
+}
+
 std::string getLocalIp() {
-    // Route-aware method: ask the OS which local address it would use to reach
-    // a public IP (8.8.8.8). This correctly selects the real LAN adapter and
-    // ignores VPN/VirtualBox/Docker/Hamachi virtual interfaces.
-    // QUdpSocket::connectToHost in Unconnected→Bound state doesn't send any
-    // packets — it just resolves the routing table.
+    // Route-aware first choice. This does not send packets; it asks the OS which
+    // local address would be used for a normal outbound route.
     QUdpSocket sock;
-    sock.connectToHost("8.8.8.8", 53);   // no actual data sent, just routes
+    sock.connectToHost("8.8.8.8", 53);
     if (sock.waitForConnected(200)) {
-        std::string ip = sock.localAddress().toString().toStdString();
+        const std::string ip = sock.localAddress().toString().toStdString();
         sock.close();
-        if (!ip.empty() && ip != "0.0.0.0" && ip != "127.0.0.1")
-            return ip;
+        if (!ip.empty() && ip != "0.0.0.0" && ip != "127.0.0.1") return ip;
     }
     sock.close();
 
-    // Fallback: iterate interfaces, preferring private RFC-1918 ranges on a
-    // running non-loopback adapter (still beats picking a VM adapter at random).
-    const auto ifaces = QNetworkInterface::allInterfaces();
-    auto isPrivate = [](const QHostAddress& a) {
-        quint32 ip = a.toIPv4Address();
-        return (ip >> 24) == 10 ||
-               (ip >> 20) == (172u * 4096 + 16) ||
-               (ip >> 16) == (192u * 256  + 168);
-    };
-    for (const auto& iface : ifaces) {
-        if (!(iface.flags() & QNetworkInterface::IsUp))       continue;
-        if (iface.flags()   & QNetworkInterface::IsLoopBack)  continue;
-        for (const auto& entry : iface.addressEntries()) {
-            if (entry.ip().protocol() != QAbstractSocket::IPv4Protocol) continue;
-            if (isPrivate(entry.ip()))
-                return entry.ip().toString().toStdString();
-        }
-    }
-    return "127.0.0.1";
+    const auto ips = localIPv4Addresses(false);
+    return ips.empty() ? std::string("127.0.0.1") : ips.front();
 }
 
 std::string generateId() {
@@ -79,6 +119,44 @@ std::string generateId() {
 int64_t nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+
+QString appDataRoot() {
+    QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (base.isEmpty()) {
+        base = QDir::home().filePath(".local/share/LocalCall");
+    }
+    QDir().mkpath(base);
+    return base;
+}
+
+QString legacyAppDataRoot() {
+    // Older builds wrote under AppDataLocation/"Local Call". Keep read fallback
+    // so existing Windows/Linux profiles migrate without losing history.
+    QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (base.isEmpty()) {
+        base = QDir::home().filePath(".local/share/LocalCall");
+    }
+    return QDir(base).filePath("Local Call");
+}
+
+bool writeTextFileAtomically(const QString& path, const QByteArray& data, QString* error) {
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QSaveFile out(path);
+    if (!out.open(QIODevice::WriteOnly)) {
+        if (error) *error = out.errorString();
+        return false;
+    }
+    if (out.write(data) != data.size()) {
+        if (error) *error = out.errorString();
+        return false;
+    }
+    if (!out.commit()) {
+        if (error) *error = out.errorString();
+        return false;
+    }
+    return true;
 }
 
 // ── Base64 ────────────────────────────────────────────────────────────────────

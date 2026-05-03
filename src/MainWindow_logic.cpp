@@ -2239,6 +2239,22 @@ ChatMessage MainWindow::sigToMessage(const SigMsg& sig, bool isMine) const
 SigMsg MainWindow::buildSig(const std::string& type) const
 {
     SigMsg sig;
+    sig.protocol  = LocalCallProtocol::Name;
+    sig.schema    = LocalCallProtocol::Schema;
+#ifdef LOCALCALL_VERSION
+    sig.app_version = LOCALCALL_VERSION;
+#endif
+#if defined(Q_OS_WIN)
+    sig.platform = "windows";
+#elif defined(Q_OS_MACOS)
+    sig.platform = "macos";
+#elif defined(Q_OS_LINUX)
+    sig.platform = "linux";
+#elif defined(Q_OS_ANDROID)
+    sig.platform = "android";
+#else
+    sig.platform = "unknown";
+#endif
     sig.type      = type;
     sig.from_id   = m_myId.toStdString();
     sig.from_name = m_myName.toStdString();

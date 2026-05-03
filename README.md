@@ -1,155 +1,203 @@
-# Local Call Pro — C++ Port
+# Local Call
 
-A complete C++ rewrite of the C# / WPF **Local Call Pro** LAN communication app.
-The UI, protocol, and all features are preserved 1:1. Built with **Qt 6** (replaces WPF)
-and **OpenCV** (replaces OpenCvSharp).
+Local Call is a Qt/C++ LAN communication app for local chat, friend requests, file sharing, voice notes, and local audio/video calls.
 
----
+This version was polished for cross-platform Linux builds while preserving the existing Local Call wire protocol so Windows, Fedora/Nobara/Bazzite, Arch-based systems, NixOS, and other future builds can still communicate on the same LAN.
+
+## What Changed in This Version
+
+- Reworked CMake into a cleaner cross-platform build with feature switches.
+- Added Fedora/Nobara/Bazzite, Arch, and NixOS build paths.
+- Added Linux desktop launcher/icon install support.
+- Kept the original TCP length-prefixed JSON framing for compatibility.
+- Added optional protocol metadata: `protocol`, `schema`, `app_version`, and `platform`.
+- Improved peer discovery on Linux by ranking usable LAN IPv4 interfaces and preferring real adapters over common virtual adapters.
+- Made TCP discovery reads more robust when packets arrive partially.
+- Made the TCP server able to parse multiple complete frames per connection while still accepting old one-frame clients.
+- Moved app data to the normal Qt `AppDataLocation`, with fallback reads from the old `AppDataLocation/Local Call` folder.
+- Switched JSON saves to atomic writes to reduce the chance of corrupt history after a crash/power loss.
+- Added `docs/PROTOCOL.md` explaining the compatibility rules and Matrix-inspired event-envelope approach.
 
 ## Features
 
-- 🔍 **LAN peer discovery** — UDP broadcast + multicast + TCP subnet scan
-- 👥 **Friend management** — requests, accept/decline, remove, block
-- 💬 **1-to-1 chat** — text, images, files (≤50 MB), voice notes
-- 🏘 **Group chat** — create groups, send messages/files/voice, manage members
-- 📞 **Voice & video calls** — UDP audio/video streaming via OpenCV
-- 🖥 **Screen sharing** — live desktop capture during a video call
-- 🔔 **Toast notifications** — incoming calls, friend requests, messages
-- 🌑 **Dark theme** — matching the original Catppuccin-dark colour scheme
-- 💾 **Persistent history** — chat logs stored to `%AppData%/Local Call/`
-- 🛡 **Group permissions** — owner/helper roles, per-member send/file/call flags
-- 🔒 **Firewall helper** — auto-adds Windows Firewall rules (UAC once)
-
----
-
-## Dependencies
-
-| Library | Version | Purpose |
-|---------|---------|---------|
-| Qt 6    | ≥ 6.5   | UI, networking, audio |
-| OpenCV  | ≥ 4.8   | Camera capture, video encode/decode |
-| [nlohmann/json](https://github.com/nlohmann/json) | ≥ 3.11 | JSON serialisation |
-
----
-
-## Build
-
-### Prerequisites (Windows)
-
-```powershell
-# Install Qt 6 (e.g. via Qt Online Installer → Qt 6.6 MSVC 2022)
-# Install OpenCV (e.g. via vcpkg: vcpkg install opencv4)
-# Install CMake ≥ 3.20
-```
-
-### CMake build
-
-```powershell
-git clone <this-repo>
-cd LocalCallPro_CPP
-
-# nlohmann/json is auto-downloaded by CMake on first configure,
-# OR manually place json.hpp in:  third_party/nlohmann/json.hpp
-
-cmake -B build -G "Visual Studio 17 2022" -A x64 \
-      -DCMAKE_PREFIX_PATH="C:/Qt/6.6.0/msvc2022_64;C:/vcpkg/installed/x64-windows"
-cmake --build build --config Release
-```
-
-The binary lands at `build/Release/LocalCallPro.exe`.
-
-### Linux / macOS
-
-```bash
-sudo apt install qt6-base-dev qt6-multimedia-dev libopencv-dev   # Ubuntu 24
-cmake -B build && cmake --build build -j$(nproc)
-```
-
-> **Note:** Firewall helper is Windows-only; on Linux the ports just need to be open.
-
----
-
-## Project Structure
-
-```
-LocalCallPro_CPP/
-├── CMakeLists.txt
-├── include/
-│   ├── MediaSettings.h       # Port constants, video presets
-│   ├── SigMsg.h              # Signaling protocol + JSON helpers
-│   ├── PeerInfo.h            # Peer discovery record
-│   ├── FriendInfo.h          # Friend + PendingRequest data
-│   ├── GroupInfo.h           # Group + permissions data
-│   ├── ChatMessage.h         # Chat message model + StoredMessage
-│   ├── Helpers.h             # Base64, MIME, IP, random names
-│   ├── PeerDiscovery.h       # LAN discovery (UDP + TCP scan)
-│   ├── SignalingServer.h     # TCP server
-│   ├── SignalingClient.h     # TCP client (fire-and-forget + reliable)
-│   ├── FriendManager.h       # Friends/groups/pending persistence
-│   ├── ChatStore.h           # Per-conversation history
-│   ├── VoiceNoteRecorder.h   # Hold-to-record audio → WAV
-│   ├── MediaWorker.h         # UDP audio/video streaming
-│   ├── FirewallHelper.h      # Windows Firewall rules
-│   ├── NotificationWindow.h  # Toast / action popup
-│   ├── InputDialog.h         # Single-field input dialog
-│   ├── CallWindow.h          # Voice/video call window
-│   ├── GroupCreateDialog.h   # New group dialog
-│   ├── GroupManageDialog.h   # Group admin panel
-│   └── MainWindow.h          # Main app window
-├── src/
-│   ├── main.cpp
-│   ├── Helpers.cpp
-│   ├── PeerDiscovery.cpp
-│   ├── SignalingServer.cpp
-│   ├── SignalingClient.cpp
-│   ├── FriendManager.cpp
-│   ├── ChatStore.cpp
-│   ├── VoiceNoteRecorder.cpp
-│   ├── MediaWorker.cpp
-│   ├── FirewallHelper.cpp
-│   ├── NotificationWindow.cpp
-│   ├── InputDialog.cpp
-│   ├── CallWindow.cpp
-│   ├── GroupCreateDialog.cpp
-│   ├── GroupManageDialog.cpp
-│   ├── MainWindow.cpp          # UI construction
-│   └── MainWindow_logic.cpp    # All signal handlers + chat logic
-└── third_party/
-    └── nlohmann/
-        └── json.hpp            # (auto-downloaded by CMake)
-```
-
----
-
-## C# → C++ Mapping
-
-| C# (WPF)              | C++ (Qt)                          |
-|-----------------------|-----------------------------------|
-| `ObservableCollection`| `QList` + manual `rebuild*()`     |
-| `INotifyPropertyChanged` | `QObject` + signals          |
-| `Dispatcher.InvokeAsync` | `QMetaObject::invokeMethod` / direct (already on main thread via signal) |
-| `Task.Run`            | `QtConcurrent::run` / `QThread`   |
-| `BitmapSource`        | `QImage` / `QPixmap`              |
-| `WaveInEvent`         | `QAudioSource`                    |
-| `WaveOutEvent`        | `QAudioSink`                      |
-| `JsonSerializer`      | `nlohmann::json`                  |
-| `DataTemplate`        | `QListWidgetItem` + `setItemWidget` |
-| `DataBinding`         | Manual `rebuild*()` helpers       |
-| `OpenCvSharp`         | `opencv2/opencv.hpp`              |
-| `NAudio`              | Qt Multimedia                     |
-
----
+- LAN peer discovery through UDP broadcast, multicast, and TCP scan fallback.
+- Friend requests, accept/decline, remove, block, and persistent contacts.
+- 1-to-1 chat with text, images, files, and voice notes.
+- Group chat with owner/helper roles and per-member permissions.
+- Optional audio/video calls and screen-sharing when multimedia/OpenCV dependencies are present.
+- Toast-style notifications for messages, calls, and requests.
+- Dark UI theme.
+- Persistent local chat history.
+- Windows firewall helper; Linux firewall helper script included.
 
 ## Network Protocol
 
-All messages are **length-prefixed JSON** over TCP (port 50010):
+Local Call signaling uses:
 
-```
+```text
 [4 bytes big-endian length][JSON body]
 ```
 
-Peer discovery uses **UDP broadcast** (port 50005) + **multicast 239.255.42.99**
-+ **TCP /24 subnet scan** as fallback.
+The protocol intentionally stays JSON-based and extensible. New builds add metadata fields but old builds can ignore them. See [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
-Audio/video streams are **raw UDP** (ports 50100 / 50105). Video frames are
-JPEG-encoded and chunked at 60 KB with an 8-byte header.
+## Ports
+
+| Purpose | Protocol | Port |
+|---|---:|---:|
+| LAN discovery | UDP | 50005 |
+| Signaling/events | TCP | 50010 |
+| Audio stream | UDP | 50100 |
+| Video stream | UDP | 50105 |
+| Group call | UDP | 50200 |
+
+## Dependencies
+
+Required:
+
+- CMake 3.20+
+- C++20 compiler
+- Qt 6 Core, Gui, Widgets, Network, Concurrent
+- nlohmann/json
+
+Recommended:
+
+- Qt 6 Multimedia for audio and voice notes
+- OpenCV for video/screen-share features
+- Qt 6 WebSockets + libdatachannel/OpenH264/Opus/libyuv for the optional WebRTC module
+
+The stable LAN TCP/UDP app works without the optional WebRTC module.
+
+## Build on Fedora / Nobara
+
+```bash
+./scripts/install-deps-fedora.sh
+./scripts/build-linux.sh
+./build/LocalCall
+```
+
+If optional WebRTC packages are missing:
+
+```bash
+LOCALCALL_WITH_WEBRTC=OFF ./scripts/build-linux.sh
+```
+
+## Build on Bazzite
+
+Bazzite is rpm-ostree based. The cleanest build workflow is inside a toolbox/distrobox Fedora container:
+
+```bash
+distrobox create --name localcall-dev --image fedora:latest
+distrobox enter localcall-dev
+sudo dnf install -y git
+cd /path/to/LocalCall
+./scripts/install-deps-fedora.sh
+./scripts/build-linux.sh
+./build/LocalCall
+```
+
+For host-layer installation, use `rpm-ostree install` with the same package list from `scripts/install-deps-fedora.sh`, reboot, then build.
+
+## Build on Arch / EndeavourOS / CachyOS
+
+```bash
+./scripts/install-deps-arch.sh
+./scripts/build-linux.sh
+./build/LocalCall
+```
+
+## Build on NixOS
+
+```bash
+nix build
+./result/bin/LocalCall
+```
+
+For development:
+
+```bash
+nix develop
+cmake -S . -B build -G Ninja -DLOCALCALL_WITH_WEBRTC=OFF
+cmake --build build --parallel
+./build/LocalCall
+```
+
+## Build on Windows
+
+Install:
+
+- Visual Studio 2022 Build Tools
+- CMake
+- Qt 6 MSVC 2022 64-bit kit
+- Qt Multimedia
+
+Then:
+
+```powershell
+cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.11.0/msvc2022_64"
+cmake --build build --config Release
+cd build\Release
+windeployqt --release LocalCall.exe
+LocalCall.exe
+```
+
+## CMake Options
+
+```bash
+-DLOCALCALL_WITH_MULTIMEDIA=ON|OFF
+-DLOCALCALL_WITH_OPENCV=AUTO|ON|OFF
+-DLOCALCALL_WITH_WEBRTC=AUTO|ON|OFF
+```
+
+Examples:
+
+```bash
+# Stable basic LAN build with chat, discovery, files, and no optional RTC module
+cmake -S . -B build -G Ninja -DLOCALCALL_WITH_WEBRTC=OFF
+
+# Force OpenCV and fail if missing
+cmake -S . -B build -G Ninja -DLOCALCALL_WITH_OPENCV=ON
+```
+
+## Linux Firewall
+
+On trusted LANs only:
+
+```bash
+./scripts/open-firewall-linux.sh
+```
+
+## Install on Linux
+
+```bash
+cmake --install build --prefix "$HOME/.local"
+```
+
+This installs the binary plus a desktop launcher/icon when supported.
+
+## Project Structure
+
+```text
+LocalCall/
+├── CMakeLists.txt
+├── flake.nix
+├── docs/
+│   └── PROTOCOL.md
+├── include/
+├── src/
+├── scripts/
+│   ├── build-linux.sh
+│   ├── install-deps-fedora.sh
+│   ├── install-deps-arch.sh
+│   └── open-firewall-linux.sh
+├── packaging/linux/
+│   ├── localcall.desktop
+│   └── localcall.png
+└── third_party/nlohmann/json.hpp
+```
+
+## Notes
+
+- All devices must be on the same LAN/subnet unless routed/firewall rules allow the ports above.
+- Linux distributions with strict firewalls may need the firewall script.
+- Older Local Call clients can still parse the new event JSON because the original field names and framing were preserved.
+- This app is inspired by Matrix design principles such as open JSON events, extensibility, and user-controlled communication, but it is not a Matrix protocol client and does not federate with Matrix homeservers.

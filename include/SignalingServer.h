@@ -75,37 +75,62 @@ private slots:
 private:
     void tryParse()
     {
-        // Need at least a 4-byte length header
-        if (m_buf.size() < 4) return;
+        // Parse every complete frame currently buffered. Older builds send one
+        // frame per connection; this loop keeps the wire format identical while
+        // making the receiver robust if a future client batches frames.
+        while (true) {
+            if (m_buf.size() < 4) return;
 
-        uint32_t len = ((uint8_t)m_buf[0] << 24) | ((uint8_t)m_buf[1] << 16)
-                     | ((uint8_t)m_buf[2] <<  8) |  (uint8_t)m_buf[3];
+            uint32_t len = ((uint8_t)m_buf[0] << 24) | ((uint8_t)m_buf[1] << 16)
+                         | ((uint8_t)m_buf[2] <<  8) |  (uint8_t)m_buf[3];
 
-        if (len == 0 || len > 60u * 1024 * 1024) { emit finished(); return; }
-        if ((uint32_t)m_buf.size() < 4 + len) return; // not yet complete
+            if (len == 0 || len > 60u * 1024 * 1024) { emit finished(); return; }
+            if ((uint32_t)m_buf.size() < 4 + len) return;
 
-        QByteArray body = m_buf.mid(4, (int)len);
+            QByteArray body = m_buf.mid(4, (int)len);
+            m_buf.remove(0, 4 + (int)len);
 
-        try {
-            using json = nlohmann::json;
-            auto msg = json::parse(body.toStdString()).get<SigMsg>();
+            try {
+                using json = nlohmann::json;
+                auto msg = json::parse(body.toStdString()).get<SigMsg>();
 
-            if (msg.type == SigType::DiscProbe) {
-                // Reply inline
-                SigMsg resp;
-                resp.type      = SigType::DiscResp;
-                resp.from_id   = m_myId.toStdString();
-                resp.from_name = m_myName.toStdString();
-                resp.ts        = Helpers::nowMs();
-                auto enc = SigMsgEncode(resp);
-                m_socket->write(reinterpret_cast<const char*>(enc.data()), enc.size());
-                m_socket->flush();
-            } else {
-                emit messageReady(msg, m_ip);
+                if (msg.type == SigType::DiscProbe) {
+                    SigMsg resp;
+                    resp.protocol  = LocalCallProtocol::Name;
+                    resp.schema    = LocalCallProtocol::Schema;
+#ifdef LOCALCALL_VERSION
+                    resp.app_version = LOCALCALL_VERSION;
+#endif
+#if defined(Q_OS_WIN)
+                    resp.platform = "windows";
+#elif defined(Q_OS_MACOS)
+                    resp.platform = "macos";
+#elif defined(Q_OS_LINUX)
+                    resp.platform = "linux";
+#elif defined(Q_OS_ANDROID)
+                    resp.platform = "android";
+#else
+                    resp.platform = "unknown";
+#endif
+                    resp.type      = SigType::DiscResp;
+                    resp.from_id   = m_myId.toStdString();
+                    resp.from_name = m_myName.toStdString();
+                    resp.ts        = Helpers::nowMs();
+                    auto enc = SigMsgEncode(resp);
+                    m_socket->write(reinterpret_cast<const char*>(enc.data()), enc.size());
+                    m_socket->flush();
+                } else {
+                    emit messageReady(msg, m_ip);
+                }
+            } catch (...) {
+                // Bad peer input should not crash the listener.
             }
-        } catch (...) {}
 
-        emit finished();
+            if (m_buf.isEmpty()) {
+                emit finished();
+                return;
+            }
+        }
     }
 
     qintptr    m_fd;

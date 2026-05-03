@@ -4,7 +4,6 @@
 #include <QDir>
 #include <QFile>
 #include <QSet>
-#include <QStandardPaths>
 
 using json = nlohmann::json;
 
@@ -15,8 +14,7 @@ ChatStore::ChatStore(QObject* parent) : QObject(parent)
 
 QString ChatStore::dataDir() const
 {
-    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-           + "/Local Call/chats";
+    return QDir(Helpers::appDataRoot()).filePath("chats");
 }
 
 QString ChatStore::sanitiseKey(const QString& key) const
@@ -29,19 +27,29 @@ QString ChatStore::sanitiseKey(const QString& key) const
 
 QString ChatStore::filePath(const QString& key) const
 {
-    return dataDir() + "/" + sanitiseKey(key) + ".json";
+    return QDir(dataDir()).filePath(sanitiseKey(key) + ".json");
+}
+
+static QString legacyChatFilePath(const QString& key)
+{
+    QString s;
+    for (QChar c : key)
+        s += (c.isLetterOrNumber() || c == '-') ? c : '_';
+    return QDir(QDir(Helpers::legacyAppDataRoot()).filePath("chats")).filePath(s + ".json");
 }
 
 QList<ChatMessage> ChatStore::load(const QString& convKey)
 {
     if (!m_cache.contains(convKey)) {
         QList<StoredMessage> stored;
-        QFile f(filePath(convKey));
-        if (f.open(QIODevice::ReadOnly)) {
+        for (const auto& path : {filePath(convKey), legacyChatFilePath(convKey)}) {
+            QFile f(path);
+            if (!f.open(QIODevice::ReadOnly)) continue;
             try {
                 auto arr = json::parse(f.readAll().toStdString());
                 for (const auto& v : arr)
                     stored.append(v.get<StoredMessage>());
+                break;
             } catch (...) {}
         }
         m_cache[convKey] = stored;
@@ -61,9 +69,7 @@ void ChatStore::append(const QString& convKey, const ChatMessage& msg)
     try {
         json arr = json::array();
         for (const auto& s : m_cache[convKey]) arr.push_back(s);
-        QFile out(filePath(convKey));
-        if (out.open(QIODevice::WriteOnly))
-            out.write(QByteArray::fromStdString(arr.dump()));
+        Helpers::writeTextFileAtomically(filePath(convKey), QByteArray::fromStdString(arr.dump(2)));
     } catch (...) {}
 }
 
@@ -124,8 +130,6 @@ void ChatStore::deleteMessages(const QString& convKey, const QList<int64_t>& tim
     try {
         json arr = json::array();
         for (const auto& s : stored) arr.push_back(s);
-        QFile out(filePath(convKey));
-        if (out.open(QIODevice::WriteOnly))
-            out.write(QByteArray::fromStdString(arr.dump()));
+        Helpers::writeTextFileAtomically(filePath(convKey), QByteArray::fromStdString(arr.dump(2)));
     } catch (...) {}
 }

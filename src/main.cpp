@@ -38,9 +38,14 @@ int main(int argc, char* argv[])
             ":/icon.ico",   // Qt resource system fallback
             ":/icon.png",
         };
-        for (const QString& p : candidates) {
-            QIcon ic(p);
-            if (!ic.isNull()) { app.setWindowIcon(ic); break; }
+        QIcon themed = QIcon::fromTheme("localcall");
+        if (!themed.isNull()) {
+            app.setWindowIcon(themed);
+        } else {
+            for (const QString& p : candidates) {
+                QIcon ic(p);
+                if (!ic.isNull()) { app.setWindowIcon(ic); break; }
+            }
         }
     }
 

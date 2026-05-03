@@ -64,11 +64,15 @@ CallWindow::CallWindow(const QString& peerIp, const QString& peerName,
     m_localVideo->setFixedSize(160, 120);
     m_localVideo->setAlignment(Qt::AlignCenter);
 
-    bool hasMedia = false;
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
-    hasMedia = true;
+    bool hasAudio = false;
+    bool hasVideo = false;
+#ifdef HAS_MULTIMEDIA
+    hasAudio = true;
 #endif
-    if (!hasMedia || mode == CallMode::Voice) {
+#ifdef HAS_OPENCV
+    hasVideo = true;
+#endif
+    if (!hasVideo || mode == CallMode::Voice) {
         m_remoteVideo->setVisible(false);
         m_localVideo->setVisible(false);
     }
@@ -94,7 +98,7 @@ CallWindow::CallWindow(const QString& peerIp, const QString& peerName,
     m_chkScreenAudio->setChecked(true);
     saRow->addWidget(m_chkScreenAudio);
     saRow->addStretch();
-    m_screenAudioPanel->setVisible(mode == CallMode::VideoScreen);
+    m_screenAudioPanel->setVisible(hasAudio && mode == CallMode::VideoScreen);
     root->addWidget(m_screenAudioPanel);
 
     // Quality controls (resolution / FPS / JPEG quality) — video modes only
@@ -139,7 +143,7 @@ CallWindow::CallWindow(const QString& peerIp, const QString& peerName,
     qRow->addWidget(m_sldQuality);
     qRow->addWidget(m_lblQuality);
     qRow->addStretch();
-    m_qualityPanel->setVisible(mode != CallMode::Voice);
+    m_qualityPanel->setVisible(hasVideo && mode != CallMode::Voice);
     root->addWidget(m_qualityPanel);
 
     // Controls
@@ -153,9 +157,9 @@ CallWindow::CallWindow(const QString& peerIp, const QString& peerName,
     auto* btnHangup = new QPushButton("📵 Hang up", this);
     btnHangup->setObjectName("hangup");
 
-    m_btnCamera->setEnabled(hasMedia && mode != CallMode::Voice);
-    m_btnScreen->setEnabled(hasMedia && mode != CallMode::Voice);
-    m_btnMute->setEnabled(hasMedia);
+    m_btnCamera->setEnabled(hasVideo && mode != CallMode::Voice);
+    m_btnScreen->setEnabled(hasVideo && mode != CallMode::Voice);
+    m_btnMute->setEnabled(hasAudio);
 
     ctrlBar->addWidget(m_btnMute);
     ctrlBar->addWidget(m_btnCamera);
@@ -206,8 +210,7 @@ void CallWindow::onQualityChanged()
 
 void CallWindow::startMedia()
 {
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
-    // Audio
+#ifdef HAS_MULTIMEDIA
     auto* aSend = new MediaWorker(MediaMode::Audio, m_peerIp,
                                    MediaSettings::MediaAudioPort, false, this);
     auto* aRecv = new MediaWorker(MediaMode::Audio, {},
@@ -215,7 +218,9 @@ void CallWindow::startMedia()
     connect(aRecv, &MediaWorker::connected, this, &CallWindow::onMediaConnected);
     m_workers << aSend << aRecv;
     m_audioSender = aSend;
+#endif
 
+#ifdef HAS_OPENCV
     if (m_mode != CallMode::Voice) {
         auto vMode = (m_mode == CallMode::VideoScreen) ? MediaMode::Screen : MediaMode::Camera;
         auto* vSend = new MediaWorker(vMode, m_peerIp,
@@ -227,14 +232,20 @@ void CallWindow::startMedia()
         m_workers << vSend << vRecv;
         m_videoSender = vSend;
     }
+#endif
+
+#ifdef HAS_MULTIMEDIA
     if (m_audioSender && m_mode == CallMode::VideoScreen)
         m_audioSender->muteAudioOnScreen = !m_chkScreenAudio->isChecked();
+#endif
+
+    if (m_workers.isEmpty()) {
+        m_overlayLabel->setText("Media support is not built in this package.");
+        QTimer::singleShot(500, this, &CallWindow::onMediaConnected);
+        return;
+    }
 
     for (auto* w : m_workers) w->start();
-#else
-    // No media deps — show a simple "connected" state immediately
-    QTimer::singleShot(500, this, &CallWindow::onMediaConnected);
-#endif
 }
 
 void CallWindow::stopMedia()

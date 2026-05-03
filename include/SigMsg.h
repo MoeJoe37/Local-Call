@@ -8,6 +8,11 @@
 // Convenience alias — only for use in .cpp files that include this header directly
 using json = nlohmann::json;
 
+namespace LocalCallProtocol {
+    inline const std::string Name = "localcall.v1";
+    inline constexpr int Schema = 1;
+}
+
 // ── Signal type constants ─────────────────────────────────────────────────────
 namespace SigType {
     inline const std::string FriendReq   = "friend_req";
@@ -65,6 +70,10 @@ inline void from_json(const nlohmann::json& j, MemberDto& m) {
 
 // ── Main signaling message ────────────────────────────────────────────────────
 struct SigMsg {
+    std::optional<std::string> protocol;
+    std::optional<int> schema;
+    std::optional<std::string> app_version;
+    std::optional<std::string> platform;
     std::string type;
     std::string from_id;
     std::string from_name;
@@ -92,6 +101,10 @@ struct SigMsg {
 inline void to_json(nlohmann::json& j, const SigMsg& m) {
     j = nlohmann::json{{"type", m.type}, {"from_id", m.from_id},
                        {"from_name", m.from_name}, {"ts", m.ts}};
+    if (m.protocol)    j["protocol"]    = *m.protocol;
+    if (m.schema)      j["schema"]      = *m.schema;
+    if (m.app_version) j["app_version"] = *m.app_version;
+    if (m.platform)    j["platform"]    = *m.platform;
     if (m.text)       j["text"]       = *m.text;
     if (m.file_name)  j["file_name"]  = *m.file_name;
     if (m.mime)       j["mime"]       = *m.mime;
@@ -120,6 +133,11 @@ inline void from_json(const nlohmann::json& j, SigMsg& m) {
     auto os = [&](const char* k, std::optional<std::string>& v) {
         if (j.contains(k) && !j[k].is_null()) v = j[k].get<std::string>();
     };
+    os("protocol",    m.protocol);
+    os("app_version", m.app_version);
+    os("platform",    m.platform);
+    if (j.contains("schema") && j["schema"].is_number_integer()) m.schema = j["schema"].get<int>();
+
     os("text",       m.text);      os("file_name",  m.file_name);
     os("mime",       m.mime);      os("data",       m.data);
     os("group_id",   m.group_id);  os("group_name", m.group_name);

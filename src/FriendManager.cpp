@@ -1,4 +1,5 @@
 #include "FriendManager.h"
+#include "Helpers.h"
 #include "nlohmann/json.hpp"
 #include <QDir>
 #include <QFile>
@@ -19,8 +20,7 @@ FriendManager::FriendManager(QObject* parent) : QObject(parent)
 
 QString FriendManager::dataDir() const
 {
-    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-           + "/Local Call";
+    return Helpers::appDataRoot();
 }
 
 // ── Friends ───────────────────────────────────────────────────────────────────
@@ -151,27 +151,42 @@ void FriendManager::saveGroups() { trySave(dataDir() + "/groups.json", m_groups)
 
 void FriendManager::load()
 {
-    auto loadFile = [](const QString& path) -> json {
-        QFile f(path);
-        if (!f.open(QIODevice::ReadOnly)) return json::array();
-        try { return json::parse(f.readAll().toStdString()); }
-        catch (...) { return json::array(); }
+    auto loadFile = [this](const QString& leaf) -> json {
+        const QString primary = QDir(dataDir()).filePath(leaf);
+        const QString legacy  = QDir(Helpers::legacyAppDataRoot()).filePath(leaf);
+        for (const auto& path : {primary, legacy}) {
+            QFile f(path);
+            if (!f.open(QIODevice::ReadOnly)) continue;
+            try { return json::parse(f.readAll().toStdString()); }
+            catch (...) { return json::array(); }
+        }
+        return json::array();
     };
 
-    try { for (const auto& v : loadFile(dataDir()+"/friends.json"))
+    m_friends.clear();
+    m_groups.clear();
+    m_pending.clear();
+    m_blocked.clear();
+    m_formerFriends.clear();
+
+    try { for (const auto& v : loadFile("friends.json"))
               m_friends.append(v.get<FriendInfo>()); } catch (...) {}
 
-    try { for (const auto& v : loadFile(dataDir()+"/groups.json"))
+    try { for (const auto& v : loadFile("groups.json"))
               m_groups.append(v.get<GroupInfo>()); } catch (...) {}
 
-    try { for (const auto& v : loadFile(dataDir()+"/pending.json"))
+    try { for (const auto& v : loadFile("pending.json"))
               m_pending.append(v.get<PendingRequest>()); } catch (...) {}
 
-    try { for (const auto& v : loadFile(dataDir()+"/blocked.json"))
+    try { for (const auto& v : loadFile("blocked.json"))
               m_blocked.insert(QString::fromStdString(v.get<std::string>())); } catch (...) {}
 
-    try { for (const auto& v : loadFile(dataDir()+"/former_friends.json"))
+    try { for (const auto& v : loadFile("former_friends.json"))
               m_formerFriends.append(v.get<FriendInfo>()); } catch (...) {}
+
+    emit friendsChanged();
+    emit groupsChanged();
+    emit pendingChanged();
 }
 
 void FriendManager::saveFriends()
@@ -179,9 +194,7 @@ void FriendManager::saveFriends()
     try {
         json arr = json::array();
         for (const auto& f : m_friends) arr.push_back(f);
-        QFile out(dataDir()+"/friends.json");
-        if (out.open(QIODevice::WriteOnly))
-            out.write(QByteArray::fromStdString(arr.dump()));
+        Helpers::writeTextFileAtomically(dataDir()+"/friends.json", QByteArray::fromStdString(arr.dump(2)));
     } catch (...) {}
 }
 
@@ -190,9 +203,7 @@ void FriendManager::savePending()
     try {
         json arr = json::array();
         for (const auto& p : m_pending) arr.push_back(p);
-        QFile out(dataDir()+"/pending.json");
-        if (out.open(QIODevice::WriteOnly))
-            out.write(QByteArray::fromStdString(arr.dump()));
+        Helpers::writeTextFileAtomically(dataDir()+"/pending.json", QByteArray::fromStdString(arr.dump(2)));
     } catch (...) {}
 }
 
@@ -201,9 +212,7 @@ void FriendManager::saveBlocked()
     try {
         json arr = json::array();
         for (const auto& id : m_blocked) arr.push_back(id.toStdString());
-        QFile out(dataDir()+"/blocked.json");
-        if (out.open(QIODevice::WriteOnly))
-            out.write(QByteArray::fromStdString(arr.dump()));
+        Helpers::writeTextFileAtomically(dataDir()+"/blocked.json", QByteArray::fromStdString(arr.dump(2)));
     } catch (...) {}
 }
 
@@ -212,9 +221,7 @@ void FriendManager::saveFormer()
     try {
         json arr = json::array();
         for (const auto& f : m_formerFriends) arr.push_back(f);
-        QFile out(dataDir()+"/former_friends.json");
-        if (out.open(QIODevice::WriteOnly))
-            out.write(QByteArray::fromStdString(arr.dump()));
+        Helpers::writeTextFileAtomically(dataDir()+"/former_friends.json", QByteArray::fromStdString(arr.dump(2)));
     } catch (...) {}
 }
 
@@ -224,9 +231,7 @@ void FriendManager::trySave(const QString& path, const QList<T>& list)
     try {
         json arr = json::array();
         for (const auto& v : list) arr.push_back(v);
-        QFile out(path);
-        if (out.open(QIODevice::WriteOnly))
-            out.write(QByteArray::fromStdString(arr.dump()));
+        Helpers::writeTextFileAtomically(path, QByteArray::fromStdString(arr.dump(2)));
     } catch (...) {}
 }
 

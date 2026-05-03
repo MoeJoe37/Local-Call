@@ -15,6 +15,8 @@ void SignalingServer::setIdentity(const QString& id, const QString& name)
 
 void SignalingServer::start()
 {
+    if (m_server && m_server->isListening()) return;
+    if (m_server) { m_server->deleteLater(); m_server = nullptr; }
     m_server = new SigTcpServer(this);
     m_server->setMaxPendingConnections(64);
     if (!m_server->listen(QHostAddress::Any, MediaSettings::SignalingPort)) {
@@ -27,7 +29,10 @@ void SignalingServer::start()
 
 void SignalingServer::stop()
 {
-    if (m_server) m_server->close();
+    if (!m_server) return;
+    m_server->close();
+    m_server->deleteLater();
+    m_server = nullptr;
 }
 
 void SignalingServer::spawnWorker(qintptr fd)

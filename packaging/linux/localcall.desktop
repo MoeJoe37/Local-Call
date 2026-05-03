@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Local Call
+Comment=LAN chat, file sharing and local calls
+Exec=LocalCall
+Icon=localcall
+Terminal=false
+Categories=Network;Chat;InstantMessaging;
+StartupNotify=true
