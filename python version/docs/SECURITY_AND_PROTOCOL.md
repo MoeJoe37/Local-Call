@@ -1,24 +1,44 @@
 # Security and Protocol Notes
 
-## Goals
+This Python edition is aligned with the C++ Local Call secure RTC protocol.
 
-The secure Python edition is designed to turn the original LAN-only prototype into a low-latency RTC app with:
+## Signaling
 
-- End-to-end encrypted media through WebRTC DTLS-SRTP/SRTP.
-- Signed critical signaling through Ed25519.
-- NAT traversal through ICE with STUN/TURN.
-- Internet calling through a WebSocket signaling relay.
-- WebRTC-managed packet loss and congestion behavior without adding high-latency app-level retransmission.
+LAN signaling uses the same TCP frame format as the C++ app:
 
-## What the signaling server can and cannot see
+```text
+[4-byte big-endian uint32 length][UTF-8 JSON]
+```
 
-The WebSocket signaling server can see JSON metadata such as peer IDs, room names, and SDP/candidate text. It does not receive plaintext audio or video. Media encryption is negotiated by WebRTC endpoints and transported through SRTP.
+The JSON envelope uses:
+
+```text
+protocol = localcall.v1
+schema   = 1
+```
+
+Critical messages are Ed25519 signed after removing `auth_signature` and serializing canonical JSON with sorted keys and compact separators.
+
+## Critical signed messages
+
+The app signs and verifies:
+
+- `friend_req`
+- `friend_acc`
+- `friend_rej`
+- `call_inv`
+- `call_acc`
+- `call_rej`
+- `call_end`
+- `rtc_offer`
+- `rtc_answer`
+- `rtc_ice`
+
+For C++ compatibility, critical messages use only fields known by the C++ `SigMsg` structure. Extra unknown fields are avoided because the C++ verifier canonicalizes through `SigMsg` and would otherwise calculate a different signature payload.
 
 ## Device identity
 
-Each client creates a persistent Ed25519 keypair.
-
-Stored fields:
+Identity file:
 
 ```json
 {
@@ -30,90 +50,60 @@ Stored fields:
 }
 ```
 
-The fingerprint is:
+Fingerprint:
 
 ```text
 base64url_no_padding(SHA256(raw_public_key))
 ```
 
-## Signed event format
+## Trust model
 
-Critical events include:
+The app uses trust-on-first-use peer key pinning. If a known peer ID appears with a different public key, the message is blocked.
 
-```json
-{
-  "protocol": "localcall.v1",
-  "schema": 1,
-  "type": "rtc_offer",
-  "from_id": "abcd1234",
-  "from_name": "MoeJoe",
-  "target_id": "peer1234",
-  "transport": "webrtc-dtls-srtp",
-  "auth_alg": "ed25519",
-  "auth_public_key": "...",
-  "auth_fingerprint": "...",
-  "auth_signature": "...",
-  "ts": 1777780000000
-}
-```
+## RTC transport
 
-The signature is calculated over canonical JSON after removing `auth_signature`:
+The Python client uses WebRTC ICE/DTLS/SCTP DataChannels through `aiortc`, matching the current C++ libdatachannel media path.
+
+Channel labels:
 
 ```text
-json.dumps(message_without_auth_signature, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+localcall-video
+localcall-audio
 ```
 
-This matches the sorted-key canonical representation expected by the updated C++ protocol design.
+Both are opened unordered with `maxRetransmits = 0` to minimize latency.
 
-## Trust-on-first-use
+## Media payloads
 
-The app pins the first public key seen for each peer ID. Later messages from the same peer ID must use the same public key. If the key changes, messages are blocked.
-
-A key change may mean:
-
-- impersonation attempt,
-- peer reinstalled the app,
-- peer deleted their identity file,
-- peer moved to a new device.
-
-## RTC event types
-
-| Type | Purpose |
-|---|---|
-| `hello` | Presence announcement over WebSocket room |
-| `call_inv` | Request to start a call |
-| `call_acc` | Accept a call |
-| `call_rej` | Reject a call |
-| `call_end` | End a call |
-| `rtc_offer` | WebRTC SDP offer |
-| `rtc_answer` | WebRTC SDP answer |
-| `rtc_ice` | Reserved for trickle ICE candidates |
-
-The current implementation exchanges complete SDP offers/answers after ICE gathering. Trickle ICE is reserved for future setup-speed improvements.
-
-## LAN wire framing
-
-LAN direct signaling uses:
+Video:
 
 ```text
-[4-byte big-endian uint32 length][UTF-8 JSON]
+H.264 Annex-B encoded frames
 ```
 
-The receiver rejects frames larger than 8 MiB.
+Audio:
 
-## Low-latency choices
+```text
+raw Opus packets, 48 kHz mono, 10 ms target frame size
+```
 
-- WebRTC media path instead of custom TCP streams.
-- 10 ms audio frame target.
-- 360p/30 FPS default video.
-- No app-level retransmission for live media.
-- TURN is supported but should be treated as fallback.
+## LCM1 frame chunking
 
-## What remains out of scope
+Every encoded frame is split into one or more DataChannel messages:
 
-- Full user accounts.
-- Federation.
-- Matrix homeserver compatibility.
-- Group calling.
-- Server-side room authorization.
-- Perfect forward secrecy for signaling metadata. Media key negotiation is handled by WebRTC.
+```text
+0..3   magic:  "LCM1"
+4      tag:    "V" or "A"
+5      version: 1
+6..7   chunk index
+8..9   total chunks
+10..13 frame id
+14..15 payload length
+16..   payload
+```
+
+All integer fields are big-endian. The chunk payload size is 16 KiB, matching C++ `RtcPeer.cpp`.
+
+## Internet calling
+
+The bundled `signaling_server.py` relays signaling only. It cannot decrypt media. For difficult NAT, configure a TURN server through `LOCALCALL_ICE_SERVERS`.

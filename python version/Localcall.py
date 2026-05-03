@@ -3,7 +3,7 @@
 Local Call Pro — Secure RTC Python Edition
 
 WebRTC-first, low-latency local/internet calling app.
-- WebRTC/aiortc media path: ICE + DTLS-SRTP + SRTP.
+- WebRTC/aiortc DataChannel media path compatible with Local Call C++ v2.0.14+.
 - Ed25519 signed signaling using PyNaCl.
 - LAN peer discovery and TCP signaling compatible with the Local Call v1 JSON envelope.
 - Optional WebSocket signaling server for internet calling.
@@ -34,7 +34,7 @@ import uuid
 from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
 
 import numpy as np
@@ -92,23 +92,22 @@ except Exception:
 try:
     import av
     from aiortc import (
-        AudioStreamTrack,
         RTCConfiguration,
         RTCIceServer,
         RTCPeerConnection,
         RTCSessionDescription,
-        VideoStreamTrack,
     )
+    from aiortc.sdp import candidate_from_sdp, candidate_to_sdp
 
     AIORTC_AVAILABLE = True
 except Exception:
     av = None
-    AudioStreamTrack = object  # type: ignore
-    VideoStreamTrack = object  # type: ignore
     RTCConfiguration = None  # type: ignore
     RTCIceServer = None  # type: ignore
     RTCPeerConnection = None  # type: ignore
     RTCSessionDescription = None  # type: ignore
+    candidate_from_sdp = None  # type: ignore
+    candidate_to_sdp = None  # type: ignore
     AIORTC_AVAILABLE = False
 
 try:
@@ -136,7 +135,7 @@ except Exception:
 # ─────────────────────────────────────────────────────────────────────────────
 
 APP_NAME = "Local Call Pro"
-APP_VERSION = "2.1.0-python-secure-rtc"
+APP_VERSION = "2.2.0-python-cpp-compatible"
 PROTOCOL = "localcall.v1"
 SCHEMA = 1
 
@@ -649,7 +648,7 @@ class WebSocketSignalingClient(QThread):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# WebRTC media tracks and worker
+# WebRTC DataChannel media worker compatible with C++ Local Call v2.0.14+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -660,137 +659,10 @@ class MediaSettings:
         "360p": (640, 360),
         "480p": (854, 480),
         "720p": (1280, 720),
+        "1080p": (1920, 1080),
         "Source": None,
     }
-    FPS_OPTS = [15, 24, 30, 45, 60]
-
-
-if AIORTC_AVAILABLE:
-
-    class CameraOrScreenTrack(VideoStreamTrack):
-        kind = "video"
-
-        def __init__(self, mode: str = "camera", target_res: Optional[Tuple[int, int]] = (640, 360), fps: int = 30):
-            super().__init__()
-            self.mode = mode
-            self.target_res = target_res
-            self.fps = max(1, int(fps or 30))
-            self._pts = 0
-            self._time_base = Fraction(1, 90000)
-            self._frame_duration = 1.0 / self.fps
-            self._last = time.monotonic()
-            self._cap = None
-            self._sct = None
-            if mode == "camera" and OPENCV_AVAILABLE:
-                self._cap = cv2.VideoCapture(0)
-                try:
-                    self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                    self._cap.set(cv2.CAP_PROP_FPS, self.fps)
-                    if target_res:
-                        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, target_res[0])
-                        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, target_res[1])
-                except Exception:
-                    pass
-            elif mode == "screen" and SCREEN_SHARE_AVAILABLE:
-                self._sct = mss.mss()
-
-        async def recv(self):
-            now = time.monotonic()
-            delay = max(0, self._frame_duration - (now - self._last))
-            if delay:
-                await asyncio.sleep(delay)
-            self._last = time.monotonic()
-
-            rgb = self._capture_rgb()
-            frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
-            frame.pts = self._pts
-            frame.time_base = self._time_base
-            self._pts += int(90000 / self.fps)
-            return frame
-
-        def _capture_rgb(self) -> np.ndarray:
-            width, height = self.target_res or (640, 360)
-            if self.mode == "camera" and self._cap is not None:
-                ok, bgr = self._cap.read()
-                if ok and bgr is not None:
-                    if self.target_res:
-                        bgr = cv2.resize(bgr, self.target_res, interpolation=cv2.INTER_AREA)
-                    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            elif self.mode == "screen" and self._sct is not None:
-                monitor = self._sct.monitors[1]
-                img = np.array(self._sct.grab(monitor))
-                bgr = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-                if self.target_res:
-                    bgr = cv2.resize(bgr, self.target_res, interpolation=cv2.INTER_AREA)
-                return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            return np.zeros((height, width, 3), dtype=np.uint8)
-
-        def stop(self):
-            try:
-                if self._cap is not None:
-                    self._cap.release()
-                if self._sct is not None:
-                    self._sct.close()
-            except Exception:
-                pass
-            super().stop()
-
-
-    class MicrophoneTrack(AudioStreamTrack):
-        kind = "audio"
-
-        def __init__(self, muted: bool = False):
-            super().__init__()
-            self.sample_rate = 48000
-            self.channels = 1
-            self.samples = 480  # 10 ms Opus-friendly packetization
-            self._pts = 0
-            self._time_base = Fraction(1, self.sample_rate)
-            self.muted = muted
-            self._p = None
-            self._stream = None
-            if AUDIO_AVAILABLE:
-                self._p = pyaudio.PyAudio()
-                self._stream = self._p.open(
-                    format=pyaudio.paInt16,
-                    channels=self.channels,
-                    rate=self.sample_rate,
-                    input=True,
-                    frames_per_buffer=self.samples,
-                )
-
-        async def recv(self):
-            if self._stream is not None and not self.muted:
-                loop = asyncio.get_running_loop()
-                data = await loop.run_in_executor(
-                    None,
-                    lambda: self._stream.read(self.samples, exception_on_overflow=False),
-                )
-            else:
-                await asyncio.sleep(self.samples / self.sample_rate)
-                data = b"\x00" * (self.samples * 2)
-
-            frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples)
-            frame.planes[0].update(data)
-            frame.sample_rate = self.sample_rate
-            frame.pts = self._pts
-            frame.time_base = self._time_base
-            self._pts += self.samples
-            return frame
-
-        def set_muted(self, muted: bool) -> None:
-            self.muted = muted
-
-        def stop(self):
-            try:
-                if self._stream is not None:
-                    self._stream.stop_stream()
-                    self._stream.close()
-                if self._p is not None:
-                    self._p.terminate()
-            except Exception:
-                pass
-            super().stop()
+    FPS_OPTS = [15, 24, 30, 60]
 
 
 @dataclass
@@ -799,7 +671,85 @@ class RtcCommand:
     data: Dict[str, Any] = field(default_factory=dict)
 
 
+class LocalCallFrameCodec:
+    """LCM1 chunking used by the C++ RtcPeer DataChannel media transport."""
+
+    MAGIC = b"LCM1"
+    VERSION = 1
+    HEADER_SIZE = 16
+    CHUNK_PAYLOAD_SIZE = 16 * 1024
+    MAX_FRAME_BYTES = 2 * 1024 * 1024
+    MAX_PENDING_FRAMES = 8
+
+    def __init__(self) -> None:
+        self._seq = {b"V": 1, b"A": 1}
+        self._pending: Dict[bytes, Dict[int, Dict[str, Any]]] = {b"V": {}, b"A": {}}
+
+    def chunk(self, frame: bytes, tag: bytes) -> List[bytes]:
+        if not frame or len(frame) > self.MAX_FRAME_BYTES:
+            return []
+        count = max(1, (len(frame) + self.CHUNK_PAYLOAD_SIZE - 1) // self.CHUNK_PAYLOAD_SIZE)
+        if count > 0xFFFF:
+            return []
+        frame_id = self._seq[tag] & 0xFFFFFFFF
+        self._seq[tag] = (self._seq[tag] + 1) & 0xFFFFFFFF
+        packets: List[bytes] = []
+        for index in range(count):
+            offset = index * self.CHUNK_PAYLOAD_SIZE
+            payload = frame[offset : offset + self.CHUNK_PAYLOAD_SIZE]
+            header = (
+                self.MAGIC
+                + tag
+                + bytes([self.VERSION])
+                + struct.pack("!HHIH", index, count, frame_id, len(payload))
+            )
+            packets.append(header + payload)
+        return packets
+
+    def assemble(self, packet: bytes, expected_tag: bytes) -> Optional[bytes]:
+        if len(packet) < self.HEADER_SIZE or packet[:4] != self.MAGIC:
+            return packet or None
+        tag = packet[4:5]
+        version = packet[5]
+        if tag != expected_tag or version != self.VERSION:
+            return None
+        index, count, frame_id, length = struct.unpack("!HHIH", packet[6:16])
+        if count <= 0 or index >= count or len(packet) != self.HEADER_SIZE + length:
+            return None
+        pending = self._pending[tag]
+        if len(pending) > self.MAX_PENDING_FRAMES:
+            oldest = next(iter(pending.keys()))
+            pending.pop(oldest, None)
+        item = pending.setdefault(frame_id, {"count": count, "chunks": {}, "total": 0})
+        if item["count"] != count:
+            pending.pop(frame_id, None)
+            return None
+        if index not in item["chunks"]:
+            item["chunks"][index] = packet[self.HEADER_SIZE :]
+            item["total"] += length
+        if len(item["chunks"]) != count:
+            return None
+        if item["total"] <= 0 or item["total"] > self.MAX_FRAME_BYTES:
+            pending.pop(frame_id, None)
+            return None
+        frame = b"".join(item["chunks"].get(i, b"") for i in range(count))
+        pending.pop(frame_id, None)
+        return frame or None
+
+
 class RtcCallWorker(QThread):
+    """
+    WebRTC/ICE/DTLS/SCTP worker using the same low-latency DataChannel media
+    protocol as the current C++ Local Call build.
+
+    Channel labels:
+      - localcall-video: H.264 Annex-B access units wrapped in LCM1 chunks.
+      - localcall-audio: raw Opus packets wrapped in LCM1 chunks.
+    """
+
+    VIDEO_LABEL = "localcall-video"
+    AUDIO_LABEL = "localcall-audio"
+
     status_changed = pyqtSignal(str)
     outgoing_signal = pyqtSignal(dict)
     remote_video = pyqtSignal(QImage)
@@ -817,10 +767,27 @@ class RtcCallWorker(QThread):
         self.pc = None
         self.mode = "camera"
         self.session_id = str(uuid.uuid4())
-        self.audio_track = None
-        self.video_track = None
-        self._audio_output = None
+        self.video_dc = None
+        self.audio_dc = None
+        self.video_open = False
+        self.audio_open = False
+        self.muted = False
+        self.target_res: Optional[Tuple[int, int]] = (640, 360)
+        self.target_fps = 30
+        self.frame_codec = LocalCallFrameCodec()
+        self._media_started = False
+        self._tasks: List[asyncio.Task] = []
+        self._cap = None
+        self._sct = None
+        self._video_encoder = None
+        self._video_decoder = None
+        self._audio_encoder = None
+        self._audio_decoder = None
         self._audio_p = None
+        self._audio_input = None
+        self._audio_output = None
+        self._audio_pts = 0
+        self._video_pts = 0
 
     def run(self) -> None:
         if not AIORTC_AVAILABLE:
@@ -853,11 +820,9 @@ class RtcCallWorker(QThread):
                 elif cmd.name == "signal":
                     await self._handle_signal_async(cmd.data["msg"])
                 elif cmd.name == "quality":
-                    # New quality applies to the next call. Live renegotiation is intentionally avoided for latency/stability.
-                    self.status_changed.emit("Quality change will apply on the next call")
+                    self._apply_quality(cmd.data.get("res_key", "360p"), int(cmd.data.get("fps", 30)))
                 elif cmd.name == "mute":
-                    if self.audio_track is not None:
-                        self.audio_track.set_muted(bool(cmd.data.get("muted")))
+                    self.muted = bool(cmd.data.get("muted"))
                 elif cmd.name == "hangup":
                     await self._close()
                     break
@@ -865,7 +830,12 @@ class RtcCallWorker(QThread):
                 self.status_changed.emit(f"RTC error: {exc}")
         self.ended.emit()
 
-    async def _new_pc(self, mode: str) -> None:
+    def _apply_quality(self, res_key: str, fps: int) -> None:
+        self.target_res = MediaSettings.RESOLUTIONS.get(res_key, (640, 360))
+        self.target_fps = max(1, min(60, int(fps)))
+        self.status_changed.emit(f"Quality set: {res_key} / {self.target_fps} FPS")
+
+    async def _new_pc(self, mode: str, initiator: bool) -> None:
         self.mode = mode or "camera"
         config = RTCConfiguration(iceServers=parse_ice_servers(self.ice_config_text))
         self.pc = RTCPeerConnection(configuration=config)
@@ -873,32 +843,100 @@ class RtcCallWorker(QThread):
         @self.pc.on("connectionstatechange")
         async def on_connectionstatechange():
             self.status_changed.emit(f"RTC state: {self.pc.connectionState}")
-            if self.pc.connectionState in {"failed", "closed", "disconnected"}:
-                if self.pc.connectionState == "failed":
-                    await self._close()
+            if self.pc.connectionState == "connected":
+                self._maybe_start_media_tasks()
+            elif self.pc.connectionState in {"failed", "closed"}:
+                await self._close()
 
         @self.pc.on("iceconnectionstatechange")
         async def on_iceconnectionstatechange():
             self.status_changed.emit(f"ICE state: {self.pc.iceConnectionState}")
 
-        @self.pc.on("track")
-        def on_track(track):
-            self.status_changed.emit(f"Remote {track.kind} track received")
-            if track.kind == "video":
-                asyncio.create_task(self._consume_video(track))
-            elif track.kind == "audio":
-                asyncio.create_task(self._consume_audio(track))
+        @self.pc.on("icecandidate")
+        async def on_icecandidate(candidate):
+            if candidate is None or candidate_to_sdp is None:
+                return
+            try:
+                self.outgoing_signal.emit(
+                    {
+                        "type": "rtc_ice",
+                        "target_id": self.peer_id,
+                        "rtc_session_id": self.session_id,
+                        "candidate": candidate_to_sdp(candidate),
+                        "candidate_mid": getattr(candidate, "sdpMid", None) or "0",
+                        "candidate_mline": getattr(candidate, "sdpMLineIndex", 0) or 0,
+                        "transport": "webrtc-dtls-srtp",
+                    }
+                )
+            except Exception:
+                pass
 
-        # Low-latency unordered control channel. This is not used for media.
-        try:
-            self.pc.createDataChannel("control", ordered=False, maxRetransmits=0)
-        except Exception:
-            pass
+        @self.pc.on("datachannel")
+        def on_datachannel(channel):
+            self._configure_data_channel(channel)
 
-        self.audio_track = MicrophoneTrack(muted=False)
-        self.pc.addTrack(self.audio_track)
-        self.video_track = CameraOrScreenTrack(mode=self.mode, target_res=(640, 360), fps=30)
-        self.pc.addTrack(self.video_track)
+        if initiator:
+            self.video_dc = self.pc.createDataChannel(self.VIDEO_LABEL, ordered=False, maxRetransmits=0)
+            self.audio_dc = self.pc.createDataChannel(self.AUDIO_LABEL, ordered=False, maxRetransmits=0)
+            self._configure_data_channel(self.video_dc)
+            self._configure_data_channel(self.audio_dc)
+
+    def _configure_data_channel(self, channel) -> None:
+        label = getattr(channel, "label", "")
+        is_video = label == self.VIDEO_LABEL
+        is_audio = label == self.AUDIO_LABEL
+        if not (is_video or is_audio):
+            self.status_changed.emit(f"Ignoring unsupported DataChannel: {label}")
+            return
+        if is_video:
+            self.video_dc = channel
+        else:
+            self.audio_dc = channel
+
+        @channel.on("open")
+        def on_open():
+            if is_video:
+                self.video_open = True
+            else:
+                self.audio_open = True
+            self.status_changed.emit(f"Media channel open: {label}")
+            self._maybe_start_media_tasks()
+
+        @channel.on("close")
+        def on_close():
+            if is_video:
+                self.video_open = False
+            else:
+                self.audio_open = False
+            self.status_changed.emit(f"Media channel closed: {label}")
+
+        @channel.on("message")
+        def on_message(message):
+            if isinstance(message, str):
+                return
+            data = bytes(message)
+            if is_video:
+                frame = self.frame_codec.assemble(data, b"V")
+                if frame:
+                    self._decode_remote_video(frame)
+            else:
+                frame = self.frame_codec.assemble(data, b"A")
+                if frame:
+                    self._decode_remote_audio(frame)
+
+    def _maybe_start_media_tasks(self) -> None:
+        if self._media_started or not self.running:
+            return
+        if self.video_dc is None or self.audio_dc is None:
+            return
+        # aiortc may report open before connectionstate reaches connected, and vice versa.
+        if getattr(self.pc, "connectionState", "") not in {"connected", "connecting"}:
+            return
+        self._media_started = True
+        loop = asyncio.get_event_loop()
+        self._tasks.append(loop.create_task(self._video_send_loop()))
+        self._tasks.append(loop.create_task(self._audio_send_loop()))
+        self.status_changed.emit("Low-latency C++ compatible media started")
 
     async def _wait_ice_complete(self, timeout: float = 5.0) -> None:
         deadline = time.monotonic() + timeout
@@ -906,9 +944,9 @@ class RtcCallWorker(QThread):
             await asyncio.sleep(0.05)
 
     async def _start_outgoing(self, mode: str, session_id: Optional[str]) -> None:
-        if self.pc is None:
-            await self._new_pc(mode)
         self.session_id = session_id or self.session_id
+        if self.pc is None:
+            await self._new_pc(mode, initiator=True)
         offer = await self.pc.createOffer()
         await self.pc.setLocalDescription(offer)
         await self._wait_ice_complete()
@@ -923,14 +961,14 @@ class RtcCallWorker(QThread):
                 "mode": mode,
             }
         )
-        self.status_changed.emit("RTC offer sent")
+        self.status_changed.emit("RTC DataChannel offer sent")
 
     async def _handle_signal_async(self, msg: Dict[str, Any]) -> None:
         mtype = msg.get("type")
         if mtype == "rtc_offer":
             self.session_id = msg.get("rtc_session_id") or self.session_id
             if self.pc is None:
-                await self._new_pc(msg.get("mode") or "camera")
+                await self._new_pc(msg.get("mode") or "camera", initiator=False)
             await self.pc.setRemoteDescription(RTCSessionDescription(sdp=msg["sdp"], type=msg.get("sdp_type", "offer")))
             answer = await self.pc.createAnswer()
             await self.pc.setLocalDescription(answer)
@@ -946,53 +984,238 @@ class RtcCallWorker(QThread):
                     "mode": msg.get("mode") or self.mode,
                 }
             )
-            self.status_changed.emit("RTC answer sent")
+            self.status_changed.emit("RTC DataChannel answer sent")
         elif mtype == "rtc_answer":
             if self.pc is not None:
                 await self.pc.setRemoteDescription(RTCSessionDescription(sdp=msg["sdp"], type=msg.get("sdp_type", "answer")))
                 self.status_changed.emit("RTC answer applied")
+        elif mtype == "rtc_ice":
+            await self._add_remote_candidate(msg)
         elif mtype == "call_end":
             await self._close()
 
-    async def _consume_video(self, track) -> None:
+    async def _add_remote_candidate(self, msg: Dict[str, Any]) -> None:
+        if self.pc is None or not msg.get("candidate") or candidate_from_sdp is None:
+            return
+        try:
+            cand_text = str(msg.get("candidate") or "")
+            if cand_text.startswith("a="):
+                cand_text = cand_text[2:]
+            candidate = candidate_from_sdp(cand_text)
+            candidate.sdpMid = msg.get("candidate_mid") or "0"
+            candidate.sdpMLineIndex = int(msg.get("candidate_mline") or 0)
+            await self.pc.addIceCandidate(candidate)
+        except Exception as exc:
+            self.status_changed.emit(f"ICE candidate ignored: {exc}")
+
+    def _open_video_encoder(self, width: int, height: int, fps: int):
+        if not AIORTC_AVAILABLE:
+            return None
+        for codec_name in ("libx264", "h264"):
+            try:
+                enc = av.CodecContext.create(codec_name, "w")
+                enc.width = width
+                enc.height = height
+                enc.time_base = Fraction(1, fps)
+                enc.framerate = Fraction(fps, 1)
+                enc.pix_fmt = "yuv420p"
+                enc.bit_rate = 800_000
+                enc.options = {
+                    "preset": "ultrafast",
+                    "tune": "zerolatency",
+                    "profile": "baseline",
+                    "x264-params": f"keyint={fps * 2}:min-keyint={fps * 2}:scenecut=0",
+                }
+                enc.open()
+                return enc
+            except Exception:
+                continue
+        return None
+
+    def _open_audio_encoder(self):
+        try:
+            enc = av.CodecContext.create("opus", "w")
+            enc.sample_rate = 48000
+            enc.layout = "mono"
+            enc.format = "s16"
+            enc.bit_rate = 32_000
+            enc.time_base = Fraction(1, 48000)
+            enc.open()
+            return enc
+        except Exception as exc:
+            self.status_changed.emit(f"Opus encoder unavailable: {exc}")
+            return None
+
+    def _capture_frame(self) -> Optional[np.ndarray]:
+        if self.mode == "screen":
+            if not SCREEN_SHARE_AVAILABLE or not OPENCV_AVAILABLE:
+                return None
+            if self._sct is None:
+                self._sct = mss.mss()
+            monitor = self._sct.monitors[1]
+            img = np.array(self._sct.grab(monitor))
+            return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        if not OPENCV_AVAILABLE:
+            return None
+        if self._cap is None:
+            self._cap = cv2.VideoCapture(0)
+            try:
+                self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
+        ok, frame = self._cap.read()
+        return frame if ok else None
+
+    async def _video_send_loop(self) -> None:
+        width, height = self.target_res or (640, 360)
+        fps = int(self.target_fps or 30)
+        enc = self._open_video_encoder(width, height, fps)
+        self._video_encoder = enc
+        if enc is None:
+            self.status_changed.emit("H.264 encoder unavailable; video send disabled")
+            return
+        delay = 1.0 / max(1, fps)
+        while self.running:
+            start = time.monotonic()
+            if self.video_dc is not None and getattr(self.video_dc, "readyState", "") == "open":
+                frame = self._capture_frame()
+                if frame is not None:
+                    if self.target_res is not None:
+                        frame = cv2.resize(frame, self.target_res)
+                    try:
+                        vf = av.VideoFrame.from_ndarray(frame, format="bgr24")
+                        vf = vf.reformat(width=width, height=height, format="yuv420p")
+                        vf.pts = self._video_pts
+                        vf.time_base = Fraction(1, fps)
+                        self._video_pts += 1
+                        for packet in enc.encode(vf):
+                            self._send_frame(self.video_dc, bytes(packet), b"V")
+                    except Exception as exc:
+                        self.status_changed.emit(f"Video encode error: {exc}")
+                        await asyncio.sleep(0.5)
+            elapsed = time.monotonic() - start
+            await asyncio.sleep(max(0.001, delay - elapsed))
+
+    async def _audio_send_loop(self) -> None:
+        if not AUDIO_AVAILABLE:
+            self.status_changed.emit("PyAudio missing; audio send disabled")
+            return
+        enc = self._open_audio_encoder()
+        self._audio_encoder = enc
+        if enc is None:
+            return
+        try:
+            self._audio_p = pyaudio.PyAudio()
+            self._audio_input = self._audio_p.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=48000,
+                input=True,
+                frames_per_buffer=480,
+            )
+        except Exception as exc:
+            self.status_changed.emit(f"Microphone unavailable: {exc}")
+            return
+        loop = asyncio.get_running_loop()
         while self.running:
             try:
-                frame = await track.recv()
+                if self.muted:
+                    pcm = b"\x00" * (480 * 2)
+                    await asyncio.sleep(0.01)
+                else:
+                    pcm = await loop.run_in_executor(None, lambda: self._audio_input.read(480, exception_on_overflow=False))
+                af = av.AudioFrame(format="s16", layout="mono", samples=480)
+                af.planes[0].update(pcm)
+                af.sample_rate = 48000
+                af.pts = self._audio_pts
+                af.time_base = Fraction(1, 48000)
+                self._audio_pts += 480
+                for packet in enc.encode(af):
+                    self._send_frame(self.audio_dc, bytes(packet), b"A")
+            except Exception:
+                await asyncio.sleep(0.02)
+
+    def _send_frame(self, channel, frame: bytes, tag: bytes) -> None:
+        if channel is None or not frame:
+            return
+        if getattr(channel, "readyState", "") != "open":
+            return
+        for chunk in self.frame_codec.chunk(frame, tag):
+            try:
+                channel.send(chunk)
+            except Exception:
+                break
+
+    def _decode_remote_video(self, data: bytes) -> None:
+        try:
+            if self._video_decoder is None:
+                self._video_decoder = av.CodecContext.create("h264", "r")
+            for frame in self._video_decoder.decode(av.Packet(data)):
                 rgb = frame.to_ndarray(format="rgb24")
                 h, w, ch = rgb.shape
                 qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
                 self.remote_video.emit(qimg)
-            except Exception:
-                break
+        except Exception:
+            pass
 
-    async def _consume_audio(self, track) -> None:
+    def _ensure_audio_output(self) -> bool:
         if not AUDIO_AVAILABLE:
-            return
+            return False
+        if self._audio_output is not None:
+            return True
         try:
-            self._audio_p = pyaudio.PyAudio()
-            self._audio_output = self._audio_p.open(format=pyaudio.paInt16, channels=1, rate=48000, output=True, frames_per_buffer=480)
-            while self.running:
-                frame = await track.recv()
+            if self._audio_p is None:
+                self._audio_p = pyaudio.PyAudio()
+            self._audio_output = self._audio_p.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=48000,
+                output=True,
+                frames_per_buffer=480,
+            )
+            return True
+        except Exception:
+            return False
+
+    def _decode_remote_audio(self, data: bytes) -> None:
+        try:
+            if not self._ensure_audio_output():
+                return
+            if self._audio_decoder is None:
+                self._audio_decoder = av.CodecContext.create("opus", "r")
+            for frame in self._audio_decoder.decode(av.Packet(data)):
+                frame = frame.reformat(format="s16", layout="mono", rate=48000)
                 arr = frame.to_ndarray()
                 if arr.ndim > 1:
                     arr = arr[0]
-                data = arr.astype(np.int16, copy=False).tobytes()
-                self._audio_output.write(data)
+                self._audio_output.write(arr.astype(np.int16, copy=False).tobytes())
         except Exception:
-            return
+            pass
 
     async def _close(self) -> None:
+        if not self.running:
+            return
         self.running = False
+        for task in list(self._tasks):
+            task.cancel()
+        self._tasks.clear()
         try:
-            if self.video_track is not None:
-                self.video_track.stop()
-            if self.audio_track is not None:
-                self.audio_track.stop()
+            if self.video_dc is not None:
+                self.video_dc.close()
+            if self.audio_dc is not None:
+                self.audio_dc.close()
             if self.pc is not None:
                 await self.pc.close()
         except Exception:
             pass
         try:
+            if self._cap is not None:
+                self._cap.release()
+            if self._sct is not None:
+                self._sct.close()
+            if self._audio_input is not None:
+                self._audio_input.stop_stream()
+                self._audio_input.close()
             if self._audio_output is not None:
                 self._audio_output.stop_stream()
                 self._audio_output.close()
@@ -1312,13 +1535,50 @@ class App(QMainWindow):
         mtype = msg.get("type")
         if mtype == "hello":
             return
-        if mtype == "call_inv":
+        if mtype == "friend_req":
+            self.on_friend_request(msg)
+        elif mtype == "friend_acc":
+            self.set_status(f"Friend accepted by {name}")
+        elif mtype == "call_inv":
             self.on_call_invite(msg)
-        elif mtype in {"rtc_offer", "rtc_answer"}:
+        elif mtype == "call_acc":
+            self.on_call_accept(msg)
+        elif mtype in {"rtc_offer", "rtc_answer", "rtc_ice"}:
             self.on_rtc_signal(msg)
         elif mtype == "call_end":
             self.set_status(f"Call ended by {name}")
             self.end_call(local_only=True)
+
+    def on_friend_request(self, msg: Dict[str, Any]) -> None:
+        peer_id = msg.get("from_id")
+        peer_name = msg.get("from_name") or peer_id
+        if not peer_id:
+            return
+        accepted = QMessageBox.question(
+            self,
+            "Friend request",
+            f"{peer_name} wants to connect with this Python client. Accept?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        reply_type = "friend_acc" if accepted == QMessageBox.StandardButton.Yes else "friend_rej"
+        reply = self.identity.base_envelope(reply_type, self.my_id, self.my_name) | {"target_id": peer_id}
+        self.dispatch_signal(reply, peer_id)
+        if reply_type == "friend_acc":
+            self.set_status(f"Accepted friend request from {peer_name}")
+
+    def on_call_accept(self, msg: Dict[str, Any]) -> None:
+        peer_id = msg.get("from_id")
+        peer_name = msg.get("from_name") or peer_id
+        if not peer_id:
+            return
+        pending = getattr(self, "pending_outgoing_call", None) or {}
+        session_id = msg.get("rtc_session_id") or pending.get("session_id") or str(uuid.uuid4())
+        mode = msg.get("mode") or pending.get("mode") or "camera"
+        self.ensure_rtc_worker(peer_id, peer_name)
+        self.rtc_worker.start_outgoing(mode, session_id)  # type: ignore[union-attr]
+        self.stack.setCurrentIndex(1)
+        self.video_view.setText("Secure RTC accepted — negotiating DataChannels…")
+        self.set_status(f"Call accepted by {peer_name}; sending C++ compatible offer")
 
     def on_call_invite(self, msg: Dict[str, Any]) -> None:
         peer_id = msg.get("from_id")
@@ -1366,22 +1626,25 @@ class App(QMainWindow):
         if not self.active_peer_id:
             return
         if not AIORTC_AVAILABLE:
-            QMessageBox.critical(self, "RTC unavailable", "Install aiortc and av using requirements.txt first.")
+            QMessageBox.critical(self, "RTC unavailable", "Install aiortc, av, PyNaCl, and media dependencies using requirements.txt first.")
             return
         peer = self.peers.get(self.active_peer_id, {})
         peer_name = peer.get("name", self.active_peer_id)
         session_id = str(uuid.uuid4())
         self.ensure_rtc_worker(self.active_peer_id, peer_name)
+        # C++ Local Call expects call_inv.mode to be "video" or "voice".
+        # Keep the Python capture mode separately so screen/camera still work locally.
+        cpp_mode = "video" if mode in {"camera", "screen", "video"} else "voice"
+        local_mode = "screen" if mode == "screen" else "camera"
         invite = self.identity.base_envelope("call_inv", self.my_id, self.my_name) | {
             "target_id": self.active_peer_id,
-            "mode": mode,
+            "mode": cpp_mode,
             "rtc_session_id": session_id,
             "transport": "webrtc-dtls-srtp",
-            "low_latency": True,
         }
+        self.pending_outgoing_call = {"peer_id": self.active_peer_id, "mode": local_mode, "session_id": session_id}
         self.dispatch_signal(invite, self.active_peer_id)
-        self.rtc_worker.start_outgoing(mode, session_id)  # type: ignore[union-attr]
-        self.video_view.setText("Calling… waiting for secure RTC connection")
+        self.video_view.setText("Calling… waiting for peer to accept")
         self.stack.setCurrentIndex(1)
 
     def on_rtc_signal(self, msg: Dict[str, Any]) -> None:
