@@ -1,74 +1,66 @@
-# Local Call Pro — Python LAN Calling App
+# Local Call Pro — Python Secure RTC Edition
 
-Local Call Pro is a lightweight Python desktop application for local-network voice, video, and screen-sharing communication. It uses PyQt6 for the interface, UDP broadcast discovery for finding peers on the same LAN, OpenCV for camera/video frames, PyAudio for microphone/speaker audio, and MSS for screen capture.
+Local Call Pro is a cross-platform Python desktop app for low-latency voice, video, and screen-sharing calls. This edition replaces the old raw UDP media path with a **WebRTC-first** design using `aiortc`, adds **Ed25519 signed signaling**, supports **STUN/TURN ICE configuration**, and includes a minimal WebSocket signaling relay for internet calling.
 
-The app is designed for quick local communication between devices connected to the same network, without requiring a central server.
-
----
-
-## Features
-
-- **Automatic LAN peer discovery** using UDP broadcast.
-- **Random local profile name** generated on startup.
-- **Editable display name** from the profile button.
-- **Peer list** showing online devices on the same network.
-- **Voice calling** using microphone and speakers.
-- **Camera video sharing** using OpenCV.
-- **Screen sharing** using MSS screen capture.
-- **Quality controls** for video resolution and FPS.
-- **Simple dark UI** built with PyQt6.
-- **No account or cloud server required**.
+The main goal of this version is **low latency first** while still fixing the major limitations of the original Python LAN prototype.
 
 ---
 
-## Current Architecture
+## What changed in this secure RTC version
 
-Local Call Pro currently works as a direct LAN communication tool:
-
-| Component | Technology | Purpose |
+| Area | Old Python version | Secure RTC Python version |
 |---|---|---|
-| GUI | PyQt6 | Desktop application interface |
-| Peer discovery | UDP broadcast | Finds other app instances on the same LAN |
-| Video capture | OpenCV | Reads webcam frames and encodes JPEG packets |
-| Screen capture | MSS + NumPy + OpenCV | Captures and encodes the screen |
-| Audio | PyAudio | Captures and plays PCM audio |
-| Media transport | UDP sockets | Sends audio/video/screen packets directly |
+| Media transport | Raw UDP JPEG/audio packets | WebRTC via `aiortc` |
+| Media encryption | No | Yes, WebRTC DTLS-SRTP/SRTP |
+| User/device authentication | No | Yes, Ed25519 device identity + signed critical signaling |
+| NAT traversal | No | Yes, ICE with STUN/TURN configuration |
+| Internet calling | No | Yes, through the included WebSocket signaling relay plus ICE/STUN/TURN |
+| Packet loss / congestion handling | No | WebRTC-managed RTP/RTCP behavior; live media stays latency-prioritized |
+| LAN discovery | UDP broadcast only | UDP broadcast still available for local peer discovery |
+| C++ protocol alignment | No signed RTC events | Uses Local Call `localcall.v1` signed JSON envelope |
 
 ---
 
-## Important Security Note
+## Important latency design choices
 
-This version is intended for **trusted local networks only**.
+This version is tuned for real-time calling rather than file-like reliability:
 
-It does **not** currently provide:
+- WebRTC is the default media path.
+- Media prefers UDP through ICE when the network allows it.
+- TURN relay is supported but should be used as a fallback because it can add latency.
+- Audio uses 48 kHz mono frames with a 10 ms packetization target.
+- Default video profile is 360p/30 FPS for lower encoding and network delay.
+- The control data channel is unordered with `maxRetransmits=0`.
+- The app does **not** add TCP-style retransmission on top of live audio/video because that increases delay.
 
-- End-to-end encryption.
-- User authentication.
-- NAT traversal.
-- Internet calling.
-- Packet retransmission or congestion control.
+For the lowest latency, use a nearby STUN/TURN server and avoid routing through distant relays.
 
-Do not expose the media ports directly to the internet. Use it only on a trusted LAN, private Wi-Fi network, or isolated test network.
+---
+
+## Project files
+
+```text
+Localcall.py                 Main PyQt6 desktop app
+signaling_server.py          Minimal WebSocket signaling relay
+requirements.txt             Python package dependencies
+README.md                    This guide
+docs/SECURITY_AND_PROTOCOL.md Security and wire protocol notes
+scripts/run_app.sh           Linux helper: create venv, install deps, run app
+scripts/run_signaling_server.sh Linux helper: run signaling relay
+```
 
 ---
 
 ## Requirements
 
-### Python
-
 Recommended:
 
-- Python **3.10 or newer**
+- Python 3.10 or newer
+- Webcam and microphone for calls
+- Speaker/headset for audio output
+- Network access between peers or a reachable signaling server
 
-Tested dependency target:
-
-- PyQt6
-- NumPy
-- OpenCV
-- PyAudio
-- MSS
-
-Install the Python packages with:
+Python packages are listed in `requirements.txt`:
 
 ```bash
 pip install -r requirements.txt
@@ -76,269 +68,228 @@ pip install -r requirements.txt
 
 ---
 
-## System Dependencies
-
-Some packages, especially **PyAudio**, require system audio development libraries before `pip install` can succeed.
+## Linux system dependencies
 
 ### Fedora / Nobara / Bazzite
 
 ```bash
-sudo dnf install -y python3 python3-pip portaudio portaudio-devel python3-devel gcc gcc-c++ make
+sudo dnf install -y \
+  python3 python3-pip python3-virtualenv \
+  portaudio-devel gcc gcc-c++ make \
+  opencv opencv-devel \
+  ffmpeg ffmpeg-devel
 ```
 
-Then install the Python dependencies:
+Bazzite note: prefer running the app inside your home directory or inside a distrobox/toolbox if your base image is immutable.
+
+### Arch / EndeavourOS / CachyOS
 
 ```bash
-pip install -r requirements.txt
+sudo pacman -S --needed \
+  python python-pip python-virtualenv \
+  portaudio base-devel opencv ffmpeg
 ```
 
-### Arch / EndeavourOS / Manjaro
-
-```bash
-sudo pacman -S --needed python python-pip portaudio base-devel
-```
-
-Then install the Python dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-### Debian / Ubuntu / Linux Mint
+### Ubuntu / Debian
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-pip python3-venv portaudio19-dev python3-dev build-essential
+sudo apt install -y \
+  python3 python3-pip python3-venv \
+  portaudio19-dev build-essential \
+  python3-opencv ffmpeg libavdevice-dev
 ```
-
-Then install the Python dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-### Windows
-
-Install Python from the official Python website or Microsoft Store, then run:
-
-```powershell
-pip install -r requirements.txt
-```
-
-If PyAudio fails to install on Windows, install a compatible prebuilt wheel or use a Python version that has a matching PyAudio wheel available.
 
 ---
 
-## Recommended Virtual Environment Setup
+## Quick start — same LAN
 
-Using a virtual environment keeps the app dependencies separate from the system Python installation.
-
-### Linux / macOS
+1. On both devices:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install --upgrade pip
 pip install -r requirements.txt
 python Localcall.py
 ```
 
-### Windows PowerShell
+2. Both clients should appear in the peer list through LAN discovery.
+3. Select the peer.
+4. Press **Start Secure Video Call** or **Start Secure Screen Share**.
 
-```powershell
+The app also starts a TCP signaling listener on port `50010`, using Local Call length-prefixed JSON signaling.
+
+---
+
+## Quick start — internet calling
+
+Internet calls need a signaling relay so peers can exchange signed WebRTC offers/answers. The relay does **not** decrypt media; it only forwards JSON signaling events.
+
+### 1. Start the relay on a reachable server
+
+```bash
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+source .venv/bin/activate
+pip install aiohttp
+python signaling_server.py --host 0.0.0.0 --port 8765
+```
+
+Open TCP port `8765` in the server firewall.
+
+### 2. Connect both clients to the same relay and room
+
+In the app:
+
+```text
+Signaling URL: ws://SERVER_IP_OR_DOMAIN:8765/ws
+Room: my-room-name
+```
+
+Press **Connect Internet Signaling** on both clients.
+
+### 3. Add TURN for difficult networks
+
+Set the ICE server field in the app, or start the app with:
+
+```bash
+export LOCALCALL_ICE_SERVERS='stun:stun.l.google.com:19302;turn:turn.example.com:3478,username,password'
 python Localcall.py
 ```
 
----
-
-## Running the App
-
-After installing the dependencies:
+You can also use JSON:
 
 ```bash
-python Localcall.py
+export LOCALCALL_ICE_SERVERS='[{"urls":"stun:stun.l.google.com:19302"},{"urls":"turn:turn.example.com:3478","username":"user","credential":"pass"}]'
 ```
-
-Open the app on two or more computers connected to the same local network. Each device should appear in the **ONLINE PEERS** list.
 
 ---
 
-## Network Ports
+## Environment variables
 
-The application uses the following ports by default:
-
-| Port | Protocol | Purpose |
-|---:|---|---|
-| `50005` | UDP | LAN peer discovery broadcast |
-| `50100` | UDP | Video or screen-share stream |
-| `50105` | UDP | Audio stream |
-
-Make sure your firewall allows UDP traffic on these ports inside the local network.
-
-### Fedora / Nobara / Bazzite firewall example
-
-```bash
-sudo firewall-cmd --add-port=50005/udp --permanent
-sudo firewall-cmd --add-port=50100/udp --permanent
-sudo firewall-cmd --add-port=50105/udp --permanent
-sudo firewall-cmd --reload
-```
-
-### Arch Linux with UFW example
-
-```bash
-sudo ufw allow 50005/udp
-sudo ufw allow 50100/udp
-sudo ufw allow 50105/udp
-```
-
-### Windows Defender Firewall
-
-Allow Python through Windows Defender Firewall when prompted, or manually allow inbound UDP traffic for:
-
-- `50005`
-- `50100`
-- `50105`
+| Variable | Purpose | Example |
+|---|---|---|
+| `LOCALCALL_SIGNALING_URL` | Default WebSocket signaling URL | `ws://192.168.1.50:8765/ws` |
+| `LOCALCALL_ROOM` | Default signaling room | `office` |
+| `LOCALCALL_ICE_SERVERS` | STUN/TURN servers | `stun:stun.l.google.com:19302;turn:host:3478,user,pass` |
+| `LOCALCALL_SIGNALING_HOST` | Helper script server host | `0.0.0.0` |
+| `LOCALCALL_SIGNALING_PORT` | Helper script server port | `8765` |
 
 ---
 
-## How to Use
+## Security model
 
-1. Start the app on the first computer.
-2. Start the app on another computer on the same LAN.
-3. Wait for the second device to appear in **ONLINE PEERS**.
-4. Select a peer.
-5. Choose one of the available interaction options:
-   - **Voice/Video Call**
-   - **Share Screen**
-6. Use the call controls to:
-   - Change resolution.
-   - Change FPS.
-   - Mute/unmute audio.
-   - End the session.
+This version creates a persistent Ed25519 identity on first launch:
+
+```text
+Linux:   ~/.local/share/local-call-pro/identity-ed25519.json
+Windows: %LOCALAPPDATA%\LocalCallPro\identity-ed25519.json
+macOS:   ~/Library/Application Support/LocalCallPro/identity-ed25519.json
+```
+
+Critical signaling messages are signed:
+
+- `hello`
+- `call_inv`
+- `call_acc`
+- `call_rej`
+- `call_end`
+- `rtc_offer`
+- `rtc_answer`
+- `rtc_ice`
+
+The app stores peer public keys using a **trust-on-first-use** model in:
+
+```text
+trusted-peers.json
+```
+
+If a peer ID later appears with a different public key, the app blocks that message because it may indicate impersonation or a device reset.
+
+For the strongest verification, compare fingerprints out-of-band before accepting calls.
+
+---
+
+## Compatibility notes
+
+The Python app uses the same event envelope style as the updated C++ version:
+
+```json
+{
+  "protocol": "localcall.v1",
+  "schema": 1,
+  "app_version": "2.1.0-python-secure-rtc",
+  "platform": "linux-x86_64",
+  "type": "rtc_offer",
+  "from_id": "abcd1234",
+  "from_name": "MoeJoe",
+  "target_id": "peer1234",
+  "transport": "webrtc-dtls-srtp",
+  "rtc_session_id": "uuid",
+  "sdp_type": "offer",
+  "sdp": "v=0...",
+  "auth_alg": "ed25519",
+  "auth_public_key": "base64url-public-key",
+  "auth_fingerprint": "base64url-sha256-public-key",
+  "auth_signature": "base64url-signature",
+  "ts": 1777780000000
+}
+```
+
+LAN signaling uses the Local Call TCP frame:
+
+```text
+[4-byte big-endian length][UTF-8 JSON body]
+```
+
+The old Python UDP media protocol is not used by default because it did not provide encryption, authentication, NAT traversal, or congestion handling.
 
 ---
 
 ## Troubleshooting
 
-### No peers appear
+### Peer does not appear on LAN
 
-Check the following:
+- Make sure both devices are on the same subnet.
+- Allow UDP port `50005` and TCP port `50010` through the firewall.
+- Some guest Wi-Fi networks block client-to-client traffic.
 
-- Both devices are on the same Wi-Fi or Ethernet network.
-- The network is not set to client isolation mode.
-- UDP broadcast is allowed by the router.
-- Firewall allows UDP port `50005`.
-- VPN software is not forcing traffic through a virtual adapter.
+### Internet call connects signaling but no media
 
-### Camera does not work
+- Add a TURN server to `LOCALCALL_ICE_SERVERS`.
+- Use a TURN server geographically close to both users.
+- Check that the TURN username/password are correct.
+- Corporate networks may block UDP; use TURN over TCP/TLS if your TURN provider supports it.
 
-Check:
+### PyAudio install fails
 
-- OpenCV is installed.
-- The camera is not being used by another app.
-- The operating system gave Python camera permission.
-- On Linux, the user has access to `/dev/video0`.
+Install PortAudio development headers first. See the Linux dependency section above.
 
-Linux check:
+### Camera is black
 
-```bash
-ls /dev/video*
-```
-
-### Audio does not work
-
-Check:
-
-- PyAudio installed correctly.
-- PortAudio system libraries are installed.
-- The selected microphone/speaker works in the operating system.
-- Firewall allows UDP port `50105`.
-
-### Screen sharing does not work
-
-Check:
-
-- MSS is installed.
-- Screen capture permissions are granted.
-- On Wayland sessions, screen capture behavior can vary by desktop environment and security policy. X11 sessions usually work more predictably with direct screen capture libraries.
-
-### PyAudio installation fails
-
-Install PortAudio development headers first, then retry:
-
-Fedora/Nobara/Bazzite:
-
-```bash
-sudo dnf install -y portaudio-devel python3-devel gcc gcc-c++ make
-pip install PyAudio
-```
-
-Arch:
-
-```bash
-sudo pacman -S --needed portaudio base-devel
-pip install PyAudio
-```
-
-Debian/Ubuntu:
-
-```bash
-sudo apt install -y portaudio19-dev python3-dev build-essential
-pip install PyAudio
-```
+- Check OS camera permissions.
+- Close other apps using the camera.
+- Try a lower resolution such as 360p.
 
 ---
 
-## Development Notes
+## Current limitations
 
-The current app is implemented in a single Python file:
-
-```text
-Localcall.py
-```
-
-Main classes:
-
-| Class | Purpose |
-|---|---|
-| `MediaSettings` | Holds resolution and FPS options |
-| `MediaWorker` | Sends or receives audio/video/screen UDP streams |
-| `PeerDiscovery` | Broadcasts and receives peer presence messages |
-| `App` | Main PyQt6 application window and UI flow |
+- This is a peer-to-peer RTC desktop app, not a full Matrix client.
+- The included signaling server is intentionally minimal and should be placed behind HTTPS/WSS for public deployment.
+- Group calls are not implemented in this Python edition.
+- Live quality changes are applied on the next call to avoid unstable renegotiation during active media.
+- TURN credentials must be supplied by the user or server operator.
 
 ---
 
-## Known Limitations
+## Recommended production hardening
 
-- Chat and file/media buttons are present in the UI but are not fully implemented in this Python version.
-- Calls are started directly after selecting a peer; there is no accept/reject invitation workflow yet.
-- UDP media packets can be lost on unstable networks.
-- Audio/video synchronization is basic.
-- No encryption or authentication is implemented.
-- Internet calls are not supported without additional relay/NAT traversal architecture.
+For public internet use:
 
----
+1. Put `signaling_server.py` behind Nginx/Caddy with TLS and WSS.
+2. Add authentication to the signaling server if rooms should be private.
+3. Use a real TURN service with short-lived credentials.
+4. Compare fingerprints out-of-band before sensitive calls.
+5. Keep dependencies updated.
 
-## Suggested Future Improvements
-
-- Add an invitation/accept/reject call flow.
-- Add encrypted signaling and media transport.
-- Add TCP or QUIC-based reliable file transfer.
-- Add chat messaging.
-- Add configurable ports from the UI.
-- Add device selection for microphone, speaker, and camera.
-- Add better packet framing and frame IDs for video chunks.
-- Add protocol version metadata for compatibility between future builds.
-- Add a settings page and persistent user preferences.
-- Package the app with PyInstaller for Windows and AppImage/Flatpak for Linux.
-
----
-
-## License
-
-No license file is included in this package. Before publishing the project publicly, add a clear license file such as MIT, GPL, Apache-2.0, or another license that matches your intended usage rights.
