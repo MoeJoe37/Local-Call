@@ -8,6 +8,7 @@
 #include <QString>
 #include <QPointer>
 #include <QEvent>
+#include <QMap>
 #include "CallTypes.h"
 #include "FriendInfo.h"
 #include "GroupInfo.h"
@@ -166,6 +167,11 @@ private:
     ChatMessage sigToMessage(const SigMsg& sig, bool isMine) const;
     SigMsg buildSig(const std::string& type) const;
     void applyDarkTitleBar();
+    void startPingMonitor();
+    void refreshPingMetrics();
+    void setPingForFriend(const QString& friendId, int pingMs);
+    QString friendPingText(const QString& friendId) const;
+    void refreshActiveChatPing();
 
     // ── Refresh animation ─────────────────────────────────────────────────────
     void startRefreshAnimation();
@@ -208,6 +214,8 @@ private:
     QPointer<NotificationWindow> m_callingNotif;  // persistent "Calling…" dialog for the caller
     QSet<QString> m_sentReqIds;
     QMap<QString, PeerInfo> m_peers;
+    QMap<QString, int> m_friendPingMs;
+    QTimer* m_pingTimer = nullptr;
 
     // Chunked file transfer reassembly
     struct IncomingTransfer {
@@ -260,6 +268,7 @@ private:
     QWidget*     m_panelChat          = nullptr;
     QLabel*      m_chatName           = nullptr;
     QLabel*      m_chatStatusDot      = nullptr;
+    QLabel*      m_chatPingLabel      = nullptr;
     QWidget*     m_chatReadOnlyBanner = nullptr;
     QWidget*     m_chatToolbar        = nullptr;
     QWidget*     m_chatInputBar       = nullptr;

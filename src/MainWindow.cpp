@@ -132,21 +132,21 @@ QLabel#msgName { color: #CBA6F7; font-size: 11px; font-weight: bold; }
 /* Input bar */
 #inputBar { background: #11111B; border-top: 1px solid #24263A; padding: 12px 18px; }
 QLineEdit#chatInput, QLineEdit#groupInput {
-    background: #202235; color: #F5F6FF;
-    border: 2px solid transparent; border-radius: 22px;
-    padding: 11px 18px; font-size: 14px; min-height: 28px;
+    background: #171827; color: #F5F6FF;
+    border: 1px solid #343756; border-radius: 20px;
+    padding: 10px 16px; font-size: 14px; min-height: 32px;
     selection-background-color: #CBA6F7; selection-color: #11111B;
 }
 QLineEdit#chatInput:hover, QLineEdit#groupInput:hover {
-    background:#25283D;
+    background:#1D1F33; border-color:#51577A;
 }
 QLineEdit#chatInput:focus, QLineEdit#groupInput:focus {
-    background: #25283D; border: 2px solid #CBA6F7;
+    background: #20243A; border: 1px solid #CBA6F7;
 }
 QPushButton#sendBtn {
     background: #CBA6F7; color: #11111B; border: none;
-    border-radius: 21px; padding: 10px 22px; font-size: 13px; font-weight: bold;
-    min-width: 76px; min-height: 28px;
+    border-radius: 20px; padding: 9px 20px; font-size: 13px; font-weight: bold;
+    min-width: 80px; min-height: 32px;
 }
 QPushButton#sendBtn:hover { background: #B4BEFE; }
 QPushButton#sendBtn:pressed { background: #A6E3A1; }
@@ -245,6 +245,16 @@ static QWidget* makeSectionHeader(const QString& text, QWidget* parent) {
     return lbl;
 }
 
+static QIcon lcIcon(const QString& name) {
+    return QIcon(QStringLiteral(":/icons/") + name + QStringLiteral(".png"));
+}
+
+static void applyIcon(QPushButton* button, const QString& iconName, int px = 18) {
+    if (!button) return;
+    button->setIcon(lcIcon(iconName));
+    button->setIconSize(QSize(px, px));
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  MAIN WINDOW CONSTRUCTOR
 // ══════════════════════════════════════════════════════════════════════════════
@@ -317,7 +327,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     m_lblMyName = new QLabel(m_myName + "  ·  " + m_localIp, sideTop);
     m_lblMyName->setObjectName("myName");
     m_lblMyName->setWordWrap(true);
-    auto* btnEdit = new QPushButton("✏", sideTop);
+    auto* btnEdit = new QPushButton("", sideTop);
+    applyIcon(btnEdit, "edit", 16);
     btnEdit->setFixedSize(28, 28);
     btnEdit->setToolTip("Edit profile");
     btnEdit->setStyleSheet("background:transparent;color:#6C7086;border:none;font-size:14px;");
@@ -326,7 +337,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     sideLayout->addWidget(sideTop);
 
     // Discover button
-    auto* discBtn = new QPushButton("⌖  Discover Peers", sidebar);
+    auto* discBtn = new QPushButton("Discover Peers", sidebar);
+    applyIcon(discBtn, "discover", 16);
     discBtn->setObjectName("discoverBtn");
     sideLayout->addWidget(discBtn);
 
@@ -384,10 +396,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     grpHeader->setContentsMargins(14,8,8,2);
     auto* grpLbl = new QLabel("GROUPS", sidebar);
     grpLbl->setStyleSheet("color:#6C7086;font-size:10px;font-weight:bold;letter-spacing:1px;");
-    auto* btnNewGrp = new QPushButton("+", sidebar);
-    btnNewGrp->setFixedSize(22, 22);
+    auto* btnNewGrp = new QPushButton("", sidebar);
+    applyIcon(btnNewGrp, "add", 16);
+    btnNewGrp->setFixedSize(24, 24);
+    btnNewGrp->setIconSize(QSize(16,16));
     btnNewGrp->setToolTip("New group");
-    btnNewGrp->setStyleSheet("background:#CBA6F7;color:#11111B;border:none;border-radius:11px;font-size:14px;font-weight:bold;");
+    btnNewGrp->setStyleSheet("background:#CBA6F7;color:#11111B;border:none;border-radius:12px;");
     grpHeader->addWidget(grpLbl, 1);
     grpHeader->addWidget(btnNewGrp);
     auto* grpHeaderWidget = new QWidget(sidebar);
@@ -432,9 +446,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     discHeader->setStyleSheet("background:#1E1E2E;border-bottom:1px solid #313244;");
     auto* discHeaderLayout = new QHBoxLayout(discHeader);
     discHeaderLayout->setContentsMargins(16,12,12,12);
-    auto* discTitle = new QLabel("⌖  Discover Peers", discHeader);
+    auto* discTitle = new QLabel("Discover Peers", discHeader);
     discTitle->setStyleSheet("font-size:15px;font-weight:bold;color:#CDD6F4;");
-    m_btnRefresh = new QPushButton("↻  Scan", discHeader);
+    m_btnRefresh = new QPushButton("Scan", discHeader);
+    applyIcon(m_btnRefresh, "refresh", 16);
     m_btnRefresh->setObjectName("btnRefresh");
     m_btnRefresh->setStyleSheet(
         "QPushButton#btnRefresh{"
@@ -450,8 +465,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     m_refreshAniTimer->setInterval(120);
     connect(m_refreshAniTimer, &QTimer::timeout, this, [this]() {
         static const QString frames[] = {
-            "↻  Scanning ·   ", "↻  Scanning ··  ",
-            "↻  Scanning ···  ", "↻  Scanning ···· "
+            "Scanning .   ", "Scanning ..  ",
+            "Scanning ... ", "Scanning ...."
         };
         m_btnRefresh->setText(frames[m_refreshAniStep % 4]);
         ++m_refreshAniStep;
@@ -491,7 +506,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         "QLineEdit{background:#313244;color:#CDD6F4;border:1px solid #45475A;"
         "border-radius:4px;padding:5px 8px;font-size:12px;}"
         "QLineEdit:focus{border-color:#CBA6F7;}");
-    auto* btnAddIp = new QPushButton("→", ipRow);
+    auto* btnAddIp = new QPushButton("", ipRow);
+    applyIcon(btnAddIp, "send", 16);
     btnAddIp->setObjectName("addPeerBtn");
     btnAddIp->setFixedSize(28, 28);
     btnAddIp->setToolTip("Connect to this IP address");
@@ -513,19 +529,27 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     chatHeader->setObjectName("chatHeader");
     auto* chatHeaderLayout = new QHBoxLayout(chatHeader);
     chatHeaderLayout->setContentsMargins(12,10,12,10);
-    auto* btnBack = new QPushButton("←", chatHeader);
-    btnBack->setStyleSheet("background:transparent;color:#A6ADC8;border:none;font-size:16px;padding:4px 8px;");
+    auto* btnBack = new QPushButton("", chatHeader);
+    applyIcon(btnBack, "back", 20);
+    btnBack->setFixedSize(34, 34);
+    btnBack->setIconSize(QSize(20,20));
+    btnBack->setStyleSheet("background:transparent;color:#A6ADC8;border:none;border-radius:9px;padding:0;");
     m_chatStatusDot = makeStatusDot(chatHeader);
     m_chatName = new QLabel("", chatHeader);
     m_chatName->setObjectName("chatTitle");
-    auto* btnChatVoice = new QPushButton("📞", chatHeader);
-    auto* btnChatVideo = new QPushButton("🎥", chatHeader);
-    auto* btnChatScreen = new QPushButton("🖥", chatHeader);
+    auto* btnChatVoice = new QPushButton("", chatHeader);
+    auto* btnChatVideo = new QPushButton("", chatHeader);
+    auto* btnChatScreen = new QPushButton("", chatHeader);
+    applyIcon(btnChatVoice, "call", 22);
+    applyIcon(btnChatVideo, "video", 22);
+    applyIcon(btnChatScreen, "screen", 22);
     btnChatVoice->setToolTip("Voice call");
     btnChatVideo->setToolTip("Video call");
     btnChatScreen->setToolTip("Share screen");
     for (auto* b : {btnChatVoice, btnChatVideo, btnChatScreen}) {
-        b->setStyleSheet("background:transparent;color:#A6ADC8;border:none;font-size:16px;padding:4px 8px;");
+        b->setFixedSize(36, 36);
+        b->setIconSize(QSize(22,22));
+        b->setStyleSheet("background:#26293D;color:#CDD6F4;border:none;border-radius:10px;padding:0;");
     }
     m_btnChatVoice = btnChatVoice;
     m_btnChatVideo = btnChatVideo;
@@ -534,6 +558,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     chatHeaderLayout->addWidget(m_chatStatusDot);
     chatHeaderLayout->addSpacing(6);
     chatHeaderLayout->addWidget(m_chatName, 1);
+    // Ping is intentionally not shown in the active chat header. It is shown
+    // only beside each friend in the sidebar and inside call/screen-share windows.
+    m_chatPingLabel = nullptr;
     chatHeaderLayout->addWidget(btnChatVoice);
     chatHeaderLayout->addWidget(btnChatVideo);
     chatHeaderLayout->addWidget(btnChatScreen);
@@ -544,7 +571,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     m_chatReadOnlyBanner->setObjectName("readOnlyBanner");
     auto* roBannerLayout = new QHBoxLayout(m_chatReadOnlyBanner);
     roBannerLayout->setContentsMargins(14,8,14,8);
-    roBannerLayout->addWidget(new QLabel("🔒  This conversation is read-only. You are no longer friends.", m_chatReadOnlyBanner));
+    auto* roIcon = new QLabel(m_chatReadOnlyBanner);
+    roIcon->setPixmap(lcIcon("lock").pixmap(16,16));
+    roBannerLayout->addWidget(roIcon);
+    roBannerLayout->addWidget(new QLabel("This conversation is read-only. You are no longer friends.", m_chatReadOnlyBanner));
     chatLayout->addWidget(m_chatReadOnlyBanner);
     m_chatReadOnlyBanner->setVisible(false);
 
@@ -584,10 +614,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     auto* tbLayout = new QHBoxLayout(m_chatToolbar);
     tbLayout->setContentsMargins(12,4,12,0);
     tbLayout->setSpacing(4);
-    auto* btnSendImg  = new QPushButton("🖼  Image", m_chatToolbar);
-    auto* btnSendFile = new QPushButton("📎  File",  m_chatToolbar);
-    auto* btnVoiceNote = new QPushButton("🎙  Record voice", m_chatToolbar);
-    m_lblRecording = new QLabel("⏺ Recording…", m_chatToolbar);
+    auto* btnSendImg  = new QPushButton("Image", m_chatToolbar);
+    auto* btnSendFile = new QPushButton("File",  m_chatToolbar);
+    auto* btnVoiceNote = new QPushButton("Record voice", m_chatToolbar);
+    applyIcon(btnSendImg, "image", 16);
+    applyIcon(btnSendFile, "file", 16);
+    applyIcon(btnVoiceNote, "voice", 16);
+    m_lblRecording = new QLabel("Recording…", m_chatToolbar);
     m_lblRecording->setObjectName("recording");
     m_lblRecording->setVisible(false);
     tbLayout->addWidget(btnSendImg);
@@ -607,6 +640,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     m_chatInput->setObjectName("chatInput");
     m_chatInput->setPlaceholderText("Type a message…");
     auto* btnSend = new QPushButton("Send", m_chatInputBar);
+    applyIcon(btnSend, "send", 16);
     btnSend->setObjectName("sendBtn");
     inputLayout->addWidget(m_chatInput, 1);
     inputLayout->addWidget(btnSend);
@@ -632,12 +666,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     groupHeader->setObjectName("groupHeader");
     auto* grpHeaderLayout = new QHBoxLayout(groupHeader);
     grpHeaderLayout->setContentsMargins(12,10,12,10);
-    auto* btnGrpBack = new QPushButton("←", groupHeader);
-    btnGrpBack->setStyleSheet("background:transparent;color:#A6ADC8;border:none;font-size:16px;padding:4px 8px;");
+    auto* btnGrpBack = new QPushButton("", groupHeader);
+    applyIcon(btnGrpBack, "back", 20);
+    btnGrpBack->setFixedSize(34, 34);
+    btnGrpBack->setIconSize(QSize(20,20));
+    btnGrpBack->setStyleSheet("background:transparent;color:#A6ADC8;border:none;border-radius:9px;padding:0;");
     m_groupName = new QLabel("", groupHeader);
     m_groupName->setObjectName("groupTitle");
-    auto* btnGrpVoice  = new QPushButton("📞", groupHeader);
-    btnGrpVoice->setStyleSheet("background:transparent;color:#A6ADC8;border:none;font-size:16px;padding:4px 8px;");
+    auto* btnGrpVoice  = new QPushButton("", groupHeader);
+    applyIcon(btnGrpVoice, "call", 22);
+    btnGrpVoice->setFixedSize(36, 36);
+    btnGrpVoice->setIconSize(QSize(22,22));
+    btnGrpVoice->setStyleSheet("background:#26293D;color:#CDD6F4;border:none;border-radius:10px;padding:0;");
     grpHeaderLayout->addWidget(btnGrpBack);
     grpHeaderLayout->addWidget(m_groupName, 1);
     grpHeaderLayout->addWidget(btnGrpVoice);
@@ -664,10 +704,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     auto* grpTbLayout = new QHBoxLayout(grpToolbar);
     grpTbLayout->setContentsMargins(12,4,12,0);
     grpTbLayout->setSpacing(4);
-    auto* btnGrpSendImg  = new QPushButton("🖼  Image", grpToolbar);
-    auto* btnGrpSendFile = new QPushButton("📎  File",  grpToolbar);
-    auto* btnGrpVoiceNote = new QPushButton("🎙  Record voice", grpToolbar);
-    m_lblGrpRecording = new QLabel("⏺ Recording…", grpToolbar);
+    auto* btnGrpSendImg  = new QPushButton("Image", grpToolbar);
+    auto* btnGrpSendFile = new QPushButton("File",  grpToolbar);
+    auto* btnGrpVoiceNote = new QPushButton("Record voice", grpToolbar);
+    applyIcon(btnGrpSendImg, "image", 16);
+    applyIcon(btnGrpSendFile, "file", 16);
+    applyIcon(btnGrpVoiceNote, "voice", 16);
+    m_lblGrpRecording = new QLabel("Recording…", grpToolbar);
     m_lblGrpRecording->setObjectName("recording");
     m_lblGrpRecording->setVisible(false);
     grpTbLayout->addWidget(btnGrpSendImg);
@@ -687,6 +730,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     m_groupInput->setObjectName("groupInput");
     m_groupInput->setPlaceholderText("Message group…");
     auto* btnGrpSend = new QPushButton("Send", grpInputBar);
+    applyIcon(btnGrpSend, "send", 16);
     btnGrpSend->setObjectName("sendBtn");
     grpInputLayout->addWidget(m_groupInput, 1);
     grpInputLayout->addWidget(btnGrpSend);
@@ -734,20 +778,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
         if (isFormer) {
             // Former friend — limited menu: can only view history or permanently delete
-            menu.addAction("💬 View History",      this, [this]{ onFriendClicked(m_friendsList->currentItem()); });
+            menu.addAction(lcIcon("chat"), "View History",      this, [this]{ onFriendClicked(m_friendsList->currentItem()); });
             menu.addSeparator();
-            menu.addAction("🗑 Delete Conversation",this, &MainWindow::onCtxDeleteConversation);
+            menu.addAction(lcIcon("delete"), "Delete Conversation",this, &MainWindow::onCtxDeleteConversation);
             menu.addSeparator();
-            menu.addAction("✕ Delete from List",   this, &MainWindow::onCtxDeleteFormerFriend);
+            menu.addAction(lcIcon("close"), "Delete from List",   this, &MainWindow::onCtxDeleteFormerFriend);
         } else {
             // Active friend — full menu
-            menu.addAction("💬 Open Chat",          this, [this]{ onFriendClicked(m_friendsList->currentItem()); });
-            menu.addAction("📞 Voice Call",         this, &MainWindow::onCtxVoiceCall);
-            menu.addAction("📹 Video Call",         this, &MainWindow::onCtxVideoCall);
+            menu.addAction(lcIcon("chat"), "Open Chat",          this, [this]{ onFriendClicked(m_friendsList->currentItem()); });
+            menu.addAction(lcIcon("call"), "Voice Call",         this, &MainWindow::onCtxVoiceCall);
+            menu.addAction(lcIcon("video"), "Video Call",         this, &MainWindow::onCtxVideoCall);
             menu.addSeparator();
-            menu.addAction("🗑 Delete Conversation",this, &MainWindow::onCtxDeleteConversation);
+            menu.addAction(lcIcon("delete"), "Delete Conversation",this, &MainWindow::onCtxDeleteConversation);
             menu.addSeparator();
-            menu.addAction("✕ Remove Friend",       this, &MainWindow::onCtxRemoveFriend);
+            menu.addAction(lcIcon("close"), "Remove Friend",       this, &MainWindow::onCtxRemoveFriend);
         }
         menu.exec(m_friendsList->mapToGlobal(p));
     });
@@ -757,13 +801,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         m_groupsList->setCurrentItem(item);
         QMenu menu;
         
-        menu.addAction("💬 Open Group Chat",    this, [this]{ onGroupClicked(m_groupsList->currentItem()); });
-        menu.addAction("📞 Group Call",         this, [this]{ onGroupVoiceCall(); });
+        menu.addAction(lcIcon("chat"), "Open Group Chat",    this, [this]{ onGroupClicked(m_groupsList->currentItem()); });
+        menu.addAction(lcIcon("call"), "Group Call",         this, [this]{ onGroupVoiceCall(); });
         menu.addSeparator();
-        menu.addAction("🗑 Delete Conversation",this, &MainWindow::onCtxDeleteConversation);
+        menu.addAction(lcIcon("delete"), "Delete Conversation",this, &MainWindow::onCtxDeleteConversation);
         menu.addSeparator();
-        menu.addAction("⚙ Manage Group",       this, &MainWindow::onCtxManageGroup);
-        auto* leaveAct = menu.addAction("✕ Leave Group", this, &MainWindow::onCtxLeaveGroup);
+        menu.addAction(lcIcon("settings"), "Manage Group",       this, &MainWindow::onCtxManageGroup);
+        auto* leaveAct = menu.addAction(lcIcon("close"), "Leave Group", this, &MainWindow::onCtxLeaveGroup);
         menu.exec(m_groupsList->mapToGlobal(p));
     });
 
@@ -774,7 +818,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         if (!item) return;
         m_chatMsgList->setCurrentItem(item);
         QMenu menu;
-        menu.addAction("📋 Copy Message", this, [this](){
+        menu.addAction(lcIcon("copy"), "Copy Message", this, [this](){
             auto sel = m_chatMsgList->selectedItems();
             if (sel.isEmpty()) return;
             QString text;
@@ -810,7 +854,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
             if (m_chatInput) { m_chatInput->setText(text); m_chatInput->setFocus(); }
         });
         menu.addSeparator();
-        menu.addAction("🗑 Delete Message", this, &MainWindow::onCtxDeleteMessages);
+        menu.addAction(lcIcon("delete"), "Delete Message", this, &MainWindow::onCtxDeleteMessages);
         menu.exec(m_chatMsgList->mapToGlobal(p));
     });
     m_groupMsgList->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -819,7 +863,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         if (!item) return;
         m_groupMsgList->setCurrentItem(item);
         QMenu menu;
-        menu.addAction("📋 Copy Message", this, [this](){
+        menu.addAction(lcIcon("copy"), "Copy Message", this, [this](){
             auto sel = m_groupMsgList->selectedItems();
             if (sel.isEmpty()) return;
             QString text;
@@ -855,7 +899,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
             if (m_groupInput) { m_groupInput->setText(text); m_groupInput->setFocus(); }
         });
         menu.addSeparator();
-        menu.addAction("🗑 Delete Message", this, &MainWindow::onCtxDeleteMessages);
+        menu.addAction(lcIcon("delete"), "Delete Message", this, &MainWindow::onCtxDeleteMessages);
         menu.exec(m_groupMsgList->mapToGlobal(p));
     });
 
@@ -896,32 +940,48 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     connect(btnVoiceNote, &QPushButton::clicked, this, [this, btnVoiceNote](bool checked) {
         if (checked) {
             onVoiceNotePress();
-            if (m_vnRec && m_vnRec->isRecording()) btnVoiceNote->setText("⏹  Stop and send");
-            else { btnVoiceNote->setChecked(false); btnVoiceNote->setText("🎙  Record voice"); }
+            if (m_vnRec && m_vnRec->isRecording()) {
+                btnVoiceNote->setText("Stop and send");
+                applyIcon(btnVoiceNote, "stop", 16);
+            } else {
+                btnVoiceNote->setChecked(false);
+                btnVoiceNote->setText("Record voice");
+                applyIcon(btnVoiceNote, "voice", 16);
+            }
         } else {
             onVoiceNoteRelease();
-            btnVoiceNote->setText("🎙  Record voice");
+            btnVoiceNote->setText("Record voice");
+            applyIcon(btnVoiceNote, "voice", 16);
         }
     });
 #else
     btnVoiceNote->setEnabled(false);
-    btnVoiceNote->setText("🎙  Voice unavailable");
+    btnVoiceNote->setText("Voice unavailable");
+    applyIcon(btnVoiceNote, "voice", 16);
 #endif
     btnGrpVoiceNote->setCheckable(true);
 #ifdef HAS_MULTIMEDIA
     connect(btnGrpVoiceNote, &QPushButton::clicked, this, [this, btnGrpVoiceNote](bool checked) {
         if (checked) {
             onGroupVoiceNotePress();
-            if (m_vnRecGroup && m_vnRecGroup->isRecording()) btnGrpVoiceNote->setText("⏹  Stop and send");
-            else { btnGrpVoiceNote->setChecked(false); btnGrpVoiceNote->setText("🎙  Record voice"); }
+            if (m_vnRecGroup && m_vnRecGroup->isRecording()) {
+                btnGrpVoiceNote->setText("Stop and send");
+                applyIcon(btnGrpVoiceNote, "stop", 16);
+            } else {
+                btnGrpVoiceNote->setChecked(false);
+                btnGrpVoiceNote->setText("Record voice");
+                applyIcon(btnGrpVoiceNote, "voice", 16);
+            }
         } else {
             onGroupVoiceNoteRelease();
-            btnGrpVoiceNote->setText("🎙  Record voice");
+            btnGrpVoiceNote->setText("Record voice");
+            applyIcon(btnGrpVoiceNote, "voice", 16);
         }
     });
 #else
     btnGrpVoiceNote->setEnabled(false);
-    btnGrpVoiceNote->setText("🎙  Voice unavailable");
+    btnGrpVoiceNote->setText("Voice unavailable");
+    applyIcon(btnGrpVoiceNote, "voice", 16);
 #endif
 
     // ── Start services (deferred — lets the window paint its first frame first)
@@ -940,6 +1000,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         m_sigServer->setIdentity(m_myId, m_myName);
         connect(m_sigServer, &SignalingServer::messageReceived, this, &MainWindow::onSignalReceived);
         m_sigServer->start();
+        startPingMonitor();
 
         // ── Typing / upload indicator timers ──────────────────────────────────
         // Debounce: fires 2 s after user stops typing, so we don't spam signals

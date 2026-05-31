@@ -12,6 +12,7 @@ using json = nlohmann::json;
 #include <QScrollArea>
 #include <QMessageBox>
 #include <QFrame>
+#include <QIcon>
 #include <algorithm>
 
 static constexpr const char* BASE_SS = R"(
@@ -148,7 +149,9 @@ GroupManageDialog::GroupManageDialog(GroupInfo* group, const QString& myId,
         // Delete group button
         auto* bottomRow = new QHBoxLayout();
         bottomRow->addStretch();
-        auto* delBtn = new QPushButton("🗑  Delete Group", this);
+        auto* delBtn = new QPushButton("Delete Group", this);
+        delBtn->setIcon(QIcon(":/icons/delete.png"));
+        delBtn->setIconSize(QSize(16,16));
         delBtn->setObjectName("deleteBtn");
         bottomRow->addWidget(delBtn);
         root->addLayout(bottomRow);
@@ -212,38 +215,42 @@ void GroupManageDialog::rebuild()
         auto* rowLayout = new QHBoxLayout(row);
         rowLayout->setContentsMargins(10, 8, 10, 8);
 
-        QString badge = isOwner ? " 👑" : isHelper ? " 🛡" : isMe ? " (you)" : "";
+        QString badge = isOwner ? "  Owner" : isHelper ? "  Helper" : isMe ? "  (you)" : "";
         auto* nameLbl = new QLabel(QString::fromStdString(friend_->name) + badge, row);
         nameLbl->setStyleSheet(QString("color:%1; font-size:13px;").arg(isMe ? "#CBA6F7" : "#CDD6F4"));
         rowLayout->addWidget(nameLbl, 1);
 
         if (canAct) {
             // Permission checkboxes
-            auto makeChk = [&](const QString& icon, bool init,
+            auto makeChk = [&](const QString& text, const QString& iconName, bool init,
                                 std::function<void(bool)> onChange) -> QCheckBox* {
-                auto* cb = new QCheckBox(icon, row);
+                auto* cb = new QCheckBox(text, row);
+                cb->setIcon(QIcon(QString(":/icons/%1.png").arg(iconName)));
+                cb->setIconSize(QSize(14,14));
                 cb->setChecked(init);
                 connect(cb, &QCheckBox::toggled, row, [onChange](bool v){ onChange(v); });
                 return cb;
             };
 
             std::string mid = memberId;
-            rowLayout->addWidget(makeChk("💬", perms.canSendMessages, [this, mid](bool v){
+            rowLayout->addWidget(makeChk("Msg", "chat", perms.canSendMessages, [this, mid](bool v){
                 m_group->permissions[mid].canSendMessages = v;
                 queuePermChange(mid);
             }));
-            rowLayout->addWidget(makeChk("📎", perms.canSendFiles, [this, mid](bool v){
+            rowLayout->addWidget(makeChk("File", "file", perms.canSendFiles, [this, mid](bool v){
                 m_group->permissions[mid].canSendFiles = v;
                 queuePermChange(mid);
             }));
-            rowLayout->addWidget(makeChk("📞", perms.canStartCalls, [this, mid](bool v){
+            rowLayout->addWidget(makeChk("Call", "call", perms.canStartCalls, [this, mid](bool v){
                 m_group->permissions[mid].canStartCalls = v;
                 queuePermChange(mid);
             }));
 
             if (actorIsOwner && !isOwner) {
                 if (!isHelper) {
-                    auto* promote = new QPushButton("🛡 Promote", row);
+                    auto* promote = new QPushButton("Promote", row);
+                    promote->setIcon(QIcon(":/icons/shield.png"));
+                    promote->setIconSize(QSize(14,14));
                     promote->setProperty("class", "action");
                     std::string fip = friend_->ip;
                     connect(promote, &QPushButton::clicked, this, [this, mid, fip](){
@@ -263,7 +270,9 @@ void GroupManageDialog::rebuild()
                     });
                     rowLayout->addWidget(promote);
                 } else {
-                    auto* demote = new QPushButton("⬇ Demote", row);
+                    auto* demote = new QPushButton("Demote", row);
+                    demote->setIcon(QIcon(":/icons/save.png"));
+                    demote->setIconSize(QSize(14,14));
                     demote->setProperty("class", "action");
                     std::string fip = friend_->ip;
                     connect(demote, &QPushButton::clicked, this, [this, mid, fip](){
@@ -286,7 +295,9 @@ void GroupManageDialog::rebuild()
                     rowLayout->addWidget(demote);
                 }
 
-                auto* kick = new QPushButton("✕ Kick", row);
+                auto* kick = new QPushButton("Kick", row);
+                kick->setIcon(QIcon(":/icons/close.png"));
+                kick->setIconSize(QSize(14,14));
                 kick->setProperty("class", "danger");
                 std::string fname = friend_->name;
                 std::string fip   = friend_->ip;

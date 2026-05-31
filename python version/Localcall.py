@@ -1350,8 +1350,8 @@ class App(QMainWindow):
         self.lbl_peer_title = QLabel("Select a peer")
         self.lbl_peer_title.setObjectName("accent")
         r.addWidget(self.lbl_peer_title)
-        self.btn_video = QPushButton("📞 Start Secure Video Call")
-        self.btn_screen = QPushButton("🖥 Start Secure Screen Share")
+        self.btn_video = QPushButton("Start Secure Video Call")
+        self.btn_screen = QPushButton("Start Secure Screen Share")
         self.btn_video.clicked.connect(lambda: self.start_call("camera"))
         self.btn_screen.clicked.connect(lambda: self.start_call("screen"))
         self.btn_video.setEnabled(False)
@@ -1389,8 +1389,8 @@ class App(QMainWindow):
         self.combo_fps = QComboBox()
         self.combo_fps.addItems([str(x) for x in MediaSettings.FPS_OPTS])
         self.combo_fps.setCurrentText("30")
-        self.btn_mute = QPushButton("🎤 Mute")
-        self.btn_hangup = QPushButton("🛑 End Call")
+        self.btn_mute = QPushButton("Mute")
+        self.btn_hangup = QPushButton("End Call")
         self.btn_hangup.setStyleSheet("background:#DC2626;color:white;border-radius:7px;padding:8px 12px;font-weight:700;")
         self.btn_mute.clicked.connect(self.toggle_mute)
         self.btn_hangup.clicked.connect(self.end_call)
@@ -1436,7 +1436,7 @@ class App(QMainWindow):
         for pid, info in sorted(self.peers.items(), key=lambda x: (x[1].get("source", ""), x[1].get("name", ""))):
             fp = info.get("auth_fingerprint") or "unknown"
             source = info.get("source", "?")
-            text = f"🟢 {info.get('name', pid)}  [{source}]  {info.get('ip', '')}  fp:{compact_fingerprint(fp)}"
+            text = f"Online {info.get('name', pid)}  [{source}]  {info.get('ip', '')}  fp:{compact_fingerprint(fp)}"
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, pid)
             self.peer_list.addItem(item)
@@ -1676,7 +1676,7 @@ class App(QMainWindow):
         self.muted = not self.muted
         if self.rtc_worker:
             self.rtc_worker.set_muted(self.muted)
-        self.btn_mute.setText("🎤 Unmute" if self.muted else "🎤 Mute")
+        self.btn_mute.setText("Unmute" if self.muted else "Mute")
 
     def end_call(self, local_only: bool = False) -> None:
         if self.rtc_worker:

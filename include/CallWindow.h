@@ -23,6 +23,7 @@
 
 class QPushButton;
 class QCheckBox;
+class QTimer;
 
 class CallWindow : public QDialog {
     Q_OBJECT
@@ -53,6 +54,7 @@ private slots:
     void onMediaConnected();
     void onRemoteFrame(QImage frame);
     void onLocalFrame(QImage frame);
+    void pollPing();
 
 private:
     void startMedia();
@@ -85,6 +87,7 @@ private:
     QLabel*      m_remoteVideo    = nullptr;
     QLabel*      m_localVideo     = nullptr;
     QLabel*      m_statusLabel    = nullptr;
+    QLabel*      m_pingLabel      = nullptr;
     QLabel*      m_overlayLabel   = nullptr;
     QPushButton* m_btnMute        = nullptr;
     QPushButton* m_btnCamera      = nullptr;
@@ -102,4 +105,6 @@ private:
     bool m_screenOn = false;
     bool m_cameraOn = true;
     bool m_closing  = false;
+    QTimer* m_pingTimer = nullptr;
+    bool m_pingInFlight = false;
 };

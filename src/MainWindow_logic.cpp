@@ -38,6 +38,9 @@ using json = nlohmann::json;
 #include <QThread>
 #include <QVector>
 #include <QUrl>
+#include <QIcon>
+#include <QElapsedTimer>
+#include <QPointer>
 #ifdef HAS_MULTIMEDIA
 #include <QMediaPlayer>
 #include <QAudioOutput>
@@ -46,6 +49,7 @@ using json = nlohmann::json;
 
 // Forward declaration
 static QString buildConvKey(const QString& a, const QString& b);
+static QIcon lcIcon(const QString& name) { return QIcon(QStringLiteral(":/icons/") + name + QStringLiteral(".png")); }
 
 #include <QPixmap>
 #include <QBuffer>
@@ -151,6 +155,7 @@ void MainWindow::showChat(FriendInfo* f)
     }
 
     m_chatName->setText(QString::fromStdString(f->name));
+    refreshActiveChatPing();
     m_chatStatusDot->setStyleSheet(
         f->isOnline ? "background:#03DAC6;border-radius:5px;min-width:10px;min-height:10px;max-width:10px;max-height:10px;"
                     : "background:#555555;border-radius:5px;min-width:10px;min-height:10px;max-width:10px;max-height:10px;");
@@ -200,7 +205,7 @@ void MainWindow::showGroupChat(GroupInfo* g)
 
     m_grpMemberList->clear();
     for (auto* mem : g->members)
-        m_grpMemberList->addItem("● " + QString::fromStdString(mem->name));
+        m_grpMemberList->addItem(QString::fromStdString(mem->name));
 
     m_panels->setCurrentWidget(m_panelGroup);
     m_groupInput->setFocus();
@@ -280,6 +285,7 @@ void MainWindow::updateFriendOnlineStatus(const QMap<QString, PeerInfo>& peers)
         m_chatStatusDot->setStyleSheet(
             on ? "background:#03DAC6;border-radius:5px;min-width:10px;min-height:10px;max-width:10px;max-height:10px;"
                : "background:#555555;border-radius:5px;min-width:10px;min-height:10px;max-width:10px;max-height:10px;");
+        refreshActiveChatPing();
     }
 }
 
@@ -297,7 +303,8 @@ void MainWindow::stopRefreshAnimation()
 {
     if (!m_btnRefresh || !m_refreshAniTimer) return;
     m_refreshAniTimer->stop();
-    m_btnRefresh->setText("↻  Scan");
+    m_btnRefresh->setText("Scan");
+    m_btnRefresh->setIcon(QIcon(":/icons/refresh.png"));
     m_btnRefresh->setEnabled(true);
 }
 
@@ -327,9 +334,9 @@ void MainWindow::rebuildPeersList()
         wl->setContentsMargins(10, 6, 8, 6);
         wl->setSpacing(8);
 
-        auto* dot = new QLabel("🟢", w);
-        dot->setFixedWidth(20);
-        dot->setAlignment(Qt::AlignCenter);
+        auto* dot = new QLabel(w);
+        dot->setFixedSize(10, 10);
+        dot->setStyleSheet("background:#A6E3A1;border-radius:5px;");
 
         auto* lblName = new QLabel(name, w);
         lblName->setStyleSheet("color:#CDD6F4;font-size:13px;font-weight:500;");
@@ -365,7 +372,9 @@ void MainWindow::rebuildPeersList()
             }
             m_sentReqIds.insert(id);
             btnAdd->setEnabled(false);
-            btnAdd->setText("✓");
+            btnAdd->setText("");
+            btnAdd->setIcon(lcIcon("check"));
+            btnAdd->setIconSize(QSize(16,16));
 
             SigMsg sig = buildSig(SigType::FriendReq);
             sendDirectSignal(ip, sig, true);
@@ -637,7 +646,7 @@ void MainWindow::handleFriendAcc(const SigMsg& msg, const QString& ip)
     if (msg.auth_public_key)  f.authPublicKey = *msg.auth_public_key;
     if (msg.auth_fingerprint) f.authFingerprint = *msg.auth_fingerprint;
     commitAddFriend(f);
-    showToast("Friend added! 🎉", QString::fromStdString(msg.from_name) + " accepted your request.");
+    showToast("Friend added", QString::fromStdString(msg.from_name) + " accepted your request.");
 }
 
 void MainWindow::handleFriendDel(const QString& fromId)
@@ -694,7 +703,7 @@ void MainWindow::handleChatMsg(const SigMsg& msg, const QString& ip)
             m_chatUploadBar->setValue(pct);
             m_chatUploadBar->setVisible(true);
             QString name = QString::fromStdString(msg.from_name);
-            m_lblChatStatus->setText("⬇ Receiving " + tr.fileName + "…");
+            m_lblChatStatus->setText("Receiving " + tr.fileName + "…");
             m_lblChatStatus->setVisible(true);
         }
 
@@ -739,7 +748,7 @@ void MainWindow::handleChatMsg(const SigMsg& msg, const QString& ip)
         } else {
             f->unreadCount++;
             rebuildFriendsList();
-            showToast(completedFromName, "📎 " + completedFileName);
+            showToast(completedFromName, completedFileName);
         }
         return;
     }
@@ -755,7 +764,7 @@ void MainWindow::handleChatMsg(const SigMsg& msg, const QString& ip)
     } else {
         f->unreadCount++;
         rebuildFriendsList();
-        showToast(QString::fromStdString(msg.from_name), msg.text.value_or("📎 attachment").c_str());
+        showToast(QString::fromStdString(msg.from_name), msg.text.value_or("attachment").c_str());
     }
 }
 
@@ -925,7 +934,7 @@ void MainWindow::sendCallInvite(FriendInfo* f, const QString& mode)
     if (m_callingNotif) m_callingNotif->close();     // guard: don't stack multiples
 
     m_callingNotif = new NotificationWindow(
-        mode == "screen" ? "🖥 Screen share…" : (mode == "video" ? "📹 Video call…" : "📞 Voice call…"),
+        mode == "screen" ? "Screen share…" : (mode == "video" ? "Video call…" : "Voice call…"),
         QString("Calling %1…\nWaiting for them to answer.").arg(peerName),
         {
             {"Cancel", [this, peerIp, cancelMsg]() mutable {
@@ -991,7 +1000,7 @@ void MainWindow::handleGrpLeave(const SigMsg& msg)
     if (m_activeGroup && m_activeGroup->groupId == *msg.group_id) {
         m_grpMemberList->clear();
         for (auto* m : g->members)
-            m_grpMemberList->addItem("● " + QString::fromStdString(m->name));
+            m_grpMemberList->addItem(QString::fromStdString(m->name));
     }
 }
 
@@ -1062,7 +1071,7 @@ void MainWindow::handleGroupMsg(const SigMsg& msg)
             appendGroupMsg(cm, false);
             scrollGroupChatToBottom();
         } else {
-            showToast(QString("[Group] ") + completedFromName, "📎 " + completedFileName);
+            showToast(QString("[Group] ") + completedFromName, completedFileName);
         }
         return;
     }
@@ -1077,7 +1086,7 @@ void MainWindow::handleGroupMsg(const SigMsg& msg)
         scrollGroupChatToBottom();
     } else {
         showToast(QString("[Group] ") + QString::fromStdString(msg.from_name),
-                  msg.text.value_or("📎 attachment").c_str());
+                  msg.text.value_or("attachment").c_str());
     }
 }
 
@@ -1898,6 +1907,76 @@ void MainWindow::onEditProfile()
 }
 
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  PING MONITOR
+// ══════════════════════════════════════════════════════════════════════════════
+
+void MainWindow::startPingMonitor()
+{
+    if (m_pingTimer) return;
+    m_pingTimer = new QTimer(this);
+    m_pingTimer->setInterval(3000);
+    connect(m_pingTimer, &QTimer::timeout, this, &MainWindow::refreshPingMetrics);
+    m_pingTimer->start();
+    QTimer::singleShot(250, this, &MainWindow::refreshPingMetrics);
+}
+
+QString MainWindow::friendPingText(const QString& friendId) const
+{
+    if (!m_friendPingMs.contains(friendId)) return QStringLiteral("Ping --");
+    const int ms = m_friendPingMs.value(friendId, -1);
+    return ms >= 0 ? QString("%1 ms").arg(ms) : QStringLiteral("Timeout");
+}
+
+void MainWindow::refreshActiveChatPing()
+{
+    // The chat header no longer displays ping. Keep this method as a no-op so
+    // existing call sites stay harmless while sidebar/call ping remain active.
+}
+
+void MainWindow::setPingForFriend(const QString& friendId, int pingMs)
+{
+    const int old = m_friendPingMs.value(friendId, -9999);
+    if (old == pingMs) {
+        refreshActiveChatPing();
+        return;
+    }
+    m_friendPingMs[friendId] = pingMs;
+    rebuildFriendsList();
+    refreshActiveChatPing();
+}
+
+void MainWindow::refreshPingMetrics()
+{
+    struct Target { QString id; QString ip; bool online; };
+    QList<Target> targets;
+    for (const auto& f : m_friendMgr->friends()) {
+        const QString id = QString::fromStdString(f.id);
+        if (!f.isOnline || f.ip.empty()) {
+            setPingForFriend(id, -1);
+            continue;
+        }
+        targets.push_back({id, QString::fromStdString(f.ip), f.isOnline});
+    }
+
+    QPointer<MainWindow> self(this);
+    for (const Target& target : targets) {
+        QtConcurrent::run([self, id = target.id, ip = target.ip]() {
+            QElapsedTimer timer;
+            QTcpSocket socket;
+            timer.start();
+            socket.connectToHost(ip, MediaSettings::SignalingPort);
+            const bool ok = socket.waitForConnected(900);
+            const int ms = ok ? static_cast<int>(timer.elapsed()) : -1;
+            socket.abort();
+            if (!self) return;
+            QMetaObject::invokeMethod(self, [self, id, ms]() {
+                if (self) self->setPingForFriend(id, ms);
+            }, Qt::QueuedConnection);
+        });
+    }
+}
+
 namespace {
 QString sidebarInitials(const QString& name)
 {
@@ -1919,7 +1998,9 @@ QWidget* makeConversationListRow(const QString& title,
                                  bool online,
                                  int unread,
                                  bool locked,
-                                 QWidget* parent)
+                                 QWidget* parent,
+                                 const QString& pingText = QString(),
+                                 const QString& avatarIcon = QString())
 {
     auto* row = new QWidget(parent);
     row->setAttribute(Qt::WA_StyledBackground, true);
@@ -1936,6 +2017,10 @@ QWidget* makeConversationListRow(const QString& title,
         "background:%1;color:%2;border-radius:19px;font-size:13px;font-weight:700;")
         .arg(locked ? "#20202E" : (online ? "#CBA6F7" : "#313244"))
         .arg(locked ? "#6C7086" : (online ? "#11111B" : "#CDD6F4")));
+    if (!avatarIcon.isEmpty()) {
+        avatar->setText(QString());
+        avatar->setPixmap(lcIcon(avatarIcon).pixmap(22, 22));
+    }
     layout->addWidget(avatar);
 
     auto* textCol = new QVBoxLayout();
@@ -1957,6 +2042,16 @@ QWidget* makeConversationListRow(const QString& title,
     textCol->addWidget(lblTitle);
     textCol->addWidget(lblSub);
     layout->addLayout(textCol, 1);
+
+    if (!pingText.isEmpty()) {
+        auto* ping = new QLabel(pingText, row);
+        ping->setAlignment(Qt::AlignCenter);
+        ping->setStyleSheet(QString(
+            "color:%1;background:#11111B;border:1px solid #313244;"
+            "border-radius:9px;font-size:9px;font-weight:600;padding:2px 6px;")
+            .arg(online ? "#A6E3A1" : "#6C7086"));
+        layout->addWidget(ping);
+    }
 
     if (unread > 0) {
         auto* badge = new QLabel(QString::number(unread), row);
@@ -1985,6 +2080,7 @@ void MainWindow::rebuildFriendsList()
     for (auto& f : m_friendMgr->friends()) {
         const QString id = QString::fromStdString(f.id);
         const QString name = QString::fromStdString(f.name);
+        const QString pingText = friendPingText(id);
         const QString subtitle = f.isOnline
             ? QString("Online · %1").arg(QString::fromStdString(f.ip))
             : QString("Offline");
@@ -1996,7 +2092,7 @@ void MainWindow::rebuildFriendsList()
         m_friendsList->setItemWidget(
             item,
             makeConversationListRow(name, subtitle, sidebarInitials(name),
-                                    f.isOnline, f.unreadCount, false, m_friendsList));
+                                    f.isOnline, f.unreadCount, false, m_friendsList, pingText));
     }
 
     // Former friends stay visible as locked read-only conversations.
@@ -2010,8 +2106,8 @@ void MainWindow::rebuildFriendsList()
 
         m_friendsList->setItemWidget(
             item,
-            makeConversationListRow(name, "Removed contact", "🔒",
-                                    false, 0, true, m_friendsList));
+            makeConversationListRow(name, "Removed contact", "",
+                                    false, 0, true, m_friendsList, QString(), "lock"));
     }
 }
 
@@ -2030,8 +2126,8 @@ void MainWindow::rebuildGroupsList()
 
         m_groupsList->setItemWidget(
             item,
-            makeConversationListRow(name, subtitle, "👥",
-                                    false, 0, false, m_groupsList));
+            makeConversationListRow(name, subtitle, "",
+                                    false, 0, false, m_groupsList, QString(), "group"));
     }
 }
 
@@ -2063,8 +2159,12 @@ void MainWindow::rebuildRequestsList()
         btnLayout->setContentsMargins(0, 4, 0, 0);
         btnLayout->setSpacing(6);
 
-        auto* accept  = new QPushButton("✓ Accept", btnRow);
-        auto* decline = new QPushButton("✕ Decline", btnRow);
+        auto* accept  = new QPushButton("Accept", btnRow);
+        auto* decline = new QPushButton("Decline", btnRow);
+        accept->setIcon(lcIcon("check"));
+        accept->setIconSize(QSize(14,14));
+        decline->setIcon(lcIcon("close"));
+        decline->setIconSize(QSize(14,14));
         accept->setFixedHeight(24);
         decline->setFixedHeight(24);
         accept->setStyleSheet(
@@ -2285,7 +2385,9 @@ static QWidget* buildBubble(const ChatMessage& cm, bool isMine,
                 imgLbl->installEventFilter(clickFilter);
                 QObject::connect(clickFilter, &QObject::destroyed, []{});
                 // Use a helper button overlapping for click
-                auto* saveBtn = new QPushButton("⬇ Save", bubble);
+                auto* saveBtn = new QPushButton("Save", bubble);
+                saveBtn->setIcon(lcIcon("save"));
+                saveBtn->setIconSize(QSize(14,14));
                 saveBtn->setStyleSheet(
                     "QPushButton{background:rgba(0,0,0,140);color:#CDD6F4;border:none;"
                     "border-radius:4px;font-size:11px;padding:3px 8px;}"
@@ -2311,7 +2413,7 @@ static QWidget* buildBubble(const ChatMessage& cm, bool isMine,
             }
         } else {
             file_fallback:
-            auto* lbl = new QLabel("🖼 " + QString::fromStdString(cm.fileName), bubble);
+            auto* lbl = new QLabel(QString::fromStdString(cm.fileName), bubble);
             lbl->setObjectName("msgText");
             lbl->setStyleSheet("color:#F4F4FB; font-size:14px; background:transparent;");
             lbl->setWordWrap(true);
@@ -2338,8 +2440,8 @@ static QWidget* buildBubble(const ChatMessage& cm, bool isMine,
         else                   sizeStr = QString::number(fsize) + " B";
 
         auto* iconRow = new QHBoxLayout();
-        auto* iconLbl = new QLabel("📎", fileBox);
-        iconLbl->setStyleSheet("font-size:22px;");
+        auto* iconLbl = new QLabel(fileBox);
+        iconLbl->setPixmap(lcIcon("file").pixmap(24, 24));
         auto* infoCol = new QVBoxLayout();
         auto* nameLbl2 = new QLabel(fname, fileBox);
         nameLbl2->setStyleSheet("color:#CDD6F4;font-size:13px;font-weight:500;");
@@ -2352,7 +2454,9 @@ static QWidget* buildBubble(const ChatMessage& cm, bool isMine,
         iconRow->addLayout(infoCol, 1);
         fbLayout->addLayout(iconRow);
 
-        auto* saveBtn = new QPushButton("⬇  Save file", fileBox);
+        auto* saveBtn = new QPushButton("Save file", fileBox);
+        saveBtn->setIcon(lcIcon("save"));
+        saveBtn->setIconSize(QSize(14,14));
         saveBtn->setStyleSheet(
             "QPushButton{background:#CBA6F7;color:#11111B;border:none;"
             "border-radius:4px;font-size:11px;padding:5px 10px;}"
@@ -2381,11 +2485,13 @@ static QWidget* buildBubble(const ChatMessage& cm, bool isMine,
         vnLayout->setContentsMargins(10, 8, 10, 8);
         vnLayout->setSpacing(8);
 
-        auto* micLbl = new QLabel("🎙", vnBox);
-        micLbl->setStyleSheet("font-size:20px;");
+        auto* micLbl = new QLabel(vnBox);
+        micLbl->setPixmap(lcIcon("voice").pixmap(22, 22));
         auto* textLbl = new QLabel("Voice note", vnBox);
         textLbl->setStyleSheet("color:#CDD6F4;font-size:12px;");
-        auto* playBtn = new QPushButton("▶  Play", vnBox);
+        auto* playBtn = new QPushButton("Play", vnBox);
+        playBtn->setIcon(lcIcon("play"));
+        playBtn->setIconSize(QSize(14,14));
         playBtn->setStyleSheet(
             "QPushButton{background:#CBA6F7;color:#11111B;border:none;"
             "border-radius:4px;font-size:11px;padding:5px 12px;}"

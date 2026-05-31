@@ -36,7 +36,7 @@ void PeerDiscovery::start()
                                 MediaSettings::BroadcastPort,
                                 QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
     if (!bound) {
-        log(QString("⚠ Cannot bind UDP :%1 — check firewall").arg(MediaSettings::BroadcastPort));
+        log(QString("Cannot bind UDP :%1 — check firewall").arg(MediaSettings::BroadcastPort));
     }
 
     // Join multicast on all interfaces
@@ -162,7 +162,7 @@ void PeerDiscovery::addPeer(const QString& id, const QString& name,
         p.lastSeen = std::chrono::steady_clock::now();
         m_peers[id] = p;
     }
-    if (isNew) log(QString("✓ Found: %1 (%2) via %3").arg(name, ip, via));
+    if (isNew) log(QString("Found: %1 (%2) via %3").arg(name, ip, via));
     publishPeers();
 }
 

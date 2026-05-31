@@ -15,6 +15,11 @@
 #include <QByteArray>
 #include <QSizePolicy>
 #include <QMessageBox>
+#include <QIcon>
+#include <QTimer>
+#include <QElapsedTimer>
+#include <QTcpSocket>
+#include <QSharedPointer>
 #include <QtGlobal>
 
 #ifdef HAS_WEBRTC
@@ -22,6 +27,16 @@
 #endif
 
 namespace {
+static QIcon lcIcon(const QString& name) {
+    return QIcon(QStringLiteral(":/icons/") + name + QStringLiteral(".png"));
+}
+
+static void applyIcon(QPushButton* button, const QString& iconName, int px = 18) {
+    if (!button) return;
+    button->setIcon(lcIcon(iconName));
+    button->setIconSize(QSize(px, px));
+}
+
 #ifdef HAS_WEBRTC
 std::vector<std::string> iceServersFromEnvironment()
 {
@@ -109,12 +124,18 @@ CallWindow::CallWindow(const QString& peerIp, const QString& peerName,
 
     auto* infoBar = new QHBoxLayout();
     infoBar->setContentsMargins(12,8,12,4);
-    auto* callWith = new QLabel(QString("🔒  %1").arg(peerName), this);
+    auto* callIcon = new QLabel(this);
+    callIcon->setPixmap(lcIcon("lock").pixmap(16, 16));
+    auto* callWith = new QLabel(peerName, this);
     callWith->setStyleSheet("font-size:14px;font-weight:bold;color:#CDD6F4;");
     m_statusLabel = new QLabel("Media connecting…", this);
     m_statusLabel->setObjectName("status");
+    m_pingLabel = new QLabel("Ping --", this);
+    m_pingLabel->setStyleSheet("color:#A6ADC8;font-size:11px;background:#181825;border:1px solid #313244;border-radius:10px;padding:3px 8px;");
+    infoBar->addWidget(callIcon);
     infoBar->addWidget(callWith);
     infoBar->addStretch();
+    infoBar->addWidget(m_pingLabel);
     infoBar->addWidget(m_statusLabel);
     root->addLayout(infoBar);
 
@@ -175,10 +196,14 @@ CallWindow::CallWindow(const QString& peerIp, const QString& peerName,
     ctrlBar->setContentsMargins(12,8,12,12);
     ctrlBar->setSpacing(8);
 
-    m_btnMute   = new QPushButton("🎤 Mute",   this);
-    m_btnCamera = new QPushButton("📷 Camera", this);
-    m_btnScreen = new QPushButton("🖥 Screen", this);
-    auto* btnHangup = new QPushButton("📵 Hang up", this);
+    m_btnMute   = new QPushButton("Mute",   this);
+    m_btnCamera = new QPushButton("Camera", this);
+    m_btnScreen = new QPushButton("Screen", this);
+    auto* btnHangup = new QPushButton("Hang up", this);
+    applyIcon(m_btnMute, "voice", 18);
+    applyIcon(m_btnCamera, "video", 18);
+    applyIcon(m_btnScreen, "screen", 18);
+    applyIcon(btnHangup, "hangup", 18);
     btnHangup->setObjectName("hangup");
 
     m_btnCamera->setEnabled(mode != CallMode::Voice);
@@ -204,6 +229,12 @@ CallWindow::CallWindow(const QString& peerIp, const QString& peerName,
     });
 
     startMedia();
+
+    m_pingTimer = new QTimer(this);
+    m_pingTimer->setInterval(2000);
+    connect(m_pingTimer, &QTimer::timeout, this, &CallWindow::pollPing);
+    m_pingTimer->start();
+    QTimer::singleShot(250, this, &CallWindow::pollPing);
 }
 
 CallWindow::~CallWindow() { stopMedia(); }
@@ -376,7 +407,7 @@ void CallWindow::startMedia()
     m_pipeline->setScreenAudioEnabled(m_chkScreenAudio ? m_chkScreenAudio->isChecked() : true);
     if (m_mode == CallMode::VideoScreen) {
         m_screenOn = true;
-        if (m_btnScreen) m_btnScreen->setText("🖥 Stop");
+        if (m_btnScreen) { m_btnScreen->setText("Stop"); applyIcon(m_btnScreen, "stop", 18); }
         m_pipeline->setScreenSharing(true);
     }
 
@@ -480,6 +511,43 @@ void CallWindow::handleRtcSignal(const SigMsg& msg)
 #endif
 }
 
+void CallWindow::pollPing()
+{
+    if (m_pingInFlight || m_peerIp.isEmpty()) return;
+    m_pingInFlight = true;
+
+    auto* socket = new QTcpSocket(this);
+    auto timer = QSharedPointer<QElapsedTimer>::create();
+    auto done = QSharedPointer<bool>::create(false);
+    timer->start();
+
+    auto finish = [this, socket, timer, done](int ms) {
+        if (*done) return;
+        *done = true;
+        m_pingInFlight = false;
+        if (m_pingLabel) {
+            if (ms >= 0) {
+                m_pingLabel->setText(QString("%1 ms").arg(ms));
+                m_pingLabel->setStyleSheet("color:#A6E3A1;font-size:11px;background:#181825;border:1px solid #313244;border-radius:10px;padding:3px 8px;");
+            } else {
+                m_pingLabel->setText("Ping timeout");
+                m_pingLabel->setStyleSheet("color:#F38BA8;font-size:11px;background:#181825;border:1px solid #313244;border-radius:10px;padding:3px 8px;");
+            }
+        }
+        socket->abort();
+        socket->deleteLater();
+    };
+
+    connect(socket, &QTcpSocket::connected, this, [finish, timer]() mutable {
+        finish(static_cast<int>(timer->elapsed()));
+    });
+    connect(socket, &QTcpSocket::errorOccurred, this, [finish](QAbstractSocket::SocketError) mutable {
+        finish(-1);
+    });
+    QTimer::singleShot(900, this, [finish]() mutable { finish(-1); });
+    socket->connectToHost(m_peerIp, MediaSettings::SignalingPort);
+}
+
 void CallWindow::onMediaConnected()
 {
     m_overlayLabel->setVisible(false);
@@ -513,13 +581,15 @@ void CallWindow::onMute()
 #if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
     if (m_audioSender) m_audioSender->muted = m_muted;
 #endif
-    m_btnMute->setText(m_muted ? "🔇 Unmute" : "🎤 Mute");
+    m_btnMute->setText(m_muted ? "Unmute" : "Mute");
+    applyIcon(m_btnMute, m_muted ? "stop" : "voice", 18);
 }
 
 void CallWindow::onCamera()
 {
     m_cameraOn = !m_cameraOn;
-    m_btnCamera->setText(m_cameraOn ? "📷 Camera" : "📷 Cam Off");
+    m_btnCamera->setText(m_cameraOn ? "Camera" : "Cam off");
+    applyIcon(m_btnCamera, "video", 18);
 #ifdef HAS_WEBRTC
     if (m_pipeline) m_pipeline->setCameraEnabled(m_cameraOn);
 #endif
@@ -531,7 +601,8 @@ void CallWindow::onCamera()
 void CallWindow::onScreen()
 {
     m_screenOn = !m_screenOn;
-    m_btnScreen->setText(m_screenOn ? "🖥 Stop" : "🖥 Screen");
+    m_btnScreen->setText(m_screenOn ? "Stop" : "Screen");
+    applyIcon(m_btnScreen, m_screenOn ? "stop" : "screen", 18);
     m_screenAudioPanel->setVisible(m_screenOn);
 
 #ifdef HAS_WEBRTC

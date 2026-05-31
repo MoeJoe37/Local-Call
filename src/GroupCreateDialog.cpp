@@ -9,6 +9,7 @@ using json = nlohmann::json;
 #include <QListWidgetItem>
 #include <QPushButton>
 #include <QMessageBox>
+#include <QIcon>
 
 GroupCreateDialog::GroupCreateDialog(const QList<FriendInfo*>& onlineFriends, QWidget* parent)
     : QDialog(parent), m_friends(onlineFriends)
@@ -54,7 +55,7 @@ GroupCreateDialog::GroupCreateDialog(const QList<FriendInfo*>& onlineFriends, QW
     m_list = new QListWidget(this);
     m_list->setSelectionMode(QAbstractItemView::MultiSelection);
     for (auto* f : onlineFriends) {
-        auto* item = new QListWidgetItem("🟢  " + QString::fromStdString(f->name), m_list);
+        auto* item = new QListWidgetItem(QIcon(":/icons/check.png"), QString::fromStdString(f->name), m_list);
         item->setData(Qt::UserRole, QVariant::fromValue<void*>(f));
     }
     root->addWidget(m_list);
