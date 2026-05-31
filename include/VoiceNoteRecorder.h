@@ -6,7 +6,8 @@
 #ifdef HAS_MULTIMEDIA
 #  include <QAudioSource>
 #  include <QAudioFormat>
-#  include <QBuffer>
+#  include <QAudioDevice>
+#  include <QIODevice>
 #endif
 
 class VoiceNoteRecorder : public QObject {
@@ -16,17 +17,23 @@ public:
     ~VoiceNoteRecorder();
 
     bool isRecording() const { return m_recording; }
-    void start();
-    QByteArray stop(); // returns WAV bytes
+    bool start();
+    QByteArray stop(); // returns PCM WAV bytes
 
 private:
-    static QByteArray buildWav(const QByteArray& pcm, int sampleRate = 16000,
-                               int channels = 1, int bitsPerSample = 16);
+#ifdef HAS_MULTIMEDIA
+    static QAudioFormat chooseInputFormat(const QAudioDevice& device);
+    static QByteArray normalizeToPcm16(const QByteArray& input, const QAudioFormat& fmt);
+#endif
+    static QByteArray buildWav(const QByteArray& pcm, int sampleRate,
+                               int channels, int bitsPerSample = 16);
 #ifdef HAS_MULTIMEDIA
     QAudioSource* m_source = nullptr;
-    QBuffer*      m_buffer = nullptr;
+    QIODevice*    m_device = nullptr;
+    QAudioFormat  m_format;
+    QByteArray    m_pcm;
 #endif
-    QMutex m_mutex;
+    mutable QMutex m_mutex;
     bool   m_recording  = false;
     int    m_sampleRate = 16000;
 };

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(LocalCall VERSION 2.0.13 LANGUAGES CXX)
+project(LocalCall VERSION 2.0.19 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -52,32 +52,73 @@ endif()
 # Helpful Qt auto-detection for local Qt online-installer builds. Linux distros,
 # Arch, Nix and Homebrew normally do not need this because Qt is found through
 # CMAKE_PREFIX_PATH, pkg-config, or the CMake package registry.
-if(NOT DEFINED CMAKE_PREFIX_PATH)
-    foreach(_candidate
-            "C:/Qt/6.11.0/msvc2022_64"
-            "C:/Qt/6.11.0/msvc2019_64"
-            "C:/Qt/6.10.0/msvc2022_64"
-            "C:/Qt/6.9.0/msvc2022_64"
-            "C:/Qt/6.8.0/msvc2022_64"
-            "C:/Qt/6.7.0/msvc2022_64"
-            "C:/Qt/6.6.2/msvc2022_64"
-            "C:/Qt/6.6.2/msvc2019_64"
-            "$ENV{HOME}/Qt/6.11.0/gcc_64"
-            "$ENV{HOME}/Qt/6.10.0/gcc_64"
-            "$ENV{HOME}/Qt/6.9.0/gcc_64"
-            "$ENV{HOME}/Qt/6.8.0/gcc_64"
-            "$ENV{HOME}/Qt/6.7.0/gcc_64"
-            "$ENV{HOME}/Qt/6.6.2/gcc_64"
-            "$ENV{HOME}/Qt/6.11.0/macos"
-            "$ENV{HOME}/Qt/6.10.0/macos"
-            "/opt/homebrew/opt/qt"
-            "/usr/local/opt/qt")
+#
+# The Windows build script and some users pass CMAKE_PREFIX_PATH manually. If
+# that value points at a Qt version/kit that is not installed, vanilla CMake
+# stops later at find_package(Qt6). Detect that case here and prepend a valid
+# Qt kit if one exists, so a stale hardcoded path does not break the build.
+set(_localcall_qt_prefix_valid FALSE)
+if(DEFINED CMAKE_PREFIX_PATH)
+    foreach(_qt_prefix IN LISTS CMAKE_PREFIX_PATH)
+        if(EXISTS "${_qt_prefix}/lib/cmake/Qt6/Qt6Config.cmake" OR
+           EXISTS "${_qt_prefix}/Qt6Config.cmake")
+            set(_localcall_qt_prefix_valid TRUE)
+            break()
+        endif()
+    endforeach()
+endif()
+
+set(_localcall_qt_candidates
+        "C:/Qt/6.11.0/msvc2022_64"
+        "C:/Qt/6.11.0/msvc2019_64"
+        "C:/Qt/6.10.0/msvc2022_64"
+        "C:/Qt/6.10.0/msvc2019_64"
+        "C:/Qt/6.9.0/msvc2022_64"
+        "C:/Qt/6.9.0/msvc2019_64"
+        "C:/Qt/6.8.0/msvc2022_64"
+        "C:/Qt/6.8.0/msvc2019_64"
+        "C:/Qt/6.7.0/msvc2022_64"
+        "C:/Qt/6.7.0/msvc2019_64"
+        "C:/Qt/6.6.2/msvc2022_64"
+        "C:/Qt/6.6.2/msvc2019_64"
+        "$ENV{HOME}/Qt/6.11.0/gcc_64"
+        "$ENV{HOME}/Qt/6.10.0/gcc_64"
+        "$ENV{HOME}/Qt/6.9.0/gcc_64"
+        "$ENV{HOME}/Qt/6.8.0/gcc_64"
+        "$ENV{HOME}/Qt/6.7.0/gcc_64"
+        "$ENV{HOME}/Qt/6.6.2/gcc_64"
+        "$ENV{HOME}/Qt/6.11.0/macos"
+        "$ENV{HOME}/Qt/6.10.0/macos"
+        "/opt/homebrew/opt/qt"
+        "/usr/local/opt/qt")
+
+if(WIN32)
+    file(GLOB _localcall_qt_globbed_candidates
+        LIST_DIRECTORIES TRUE
+        "C:/Qt/6.*/*"
+        "$ENV{USERPROFILE}/Qt/6.*/*")
+    list(APPEND _localcall_qt_candidates ${_localcall_qt_globbed_candidates})
+endif()
+
+if(NOT _localcall_qt_prefix_valid)
+    foreach(_candidate IN LISTS _localcall_qt_candidates)
         if(EXISTS "${_candidate}/lib/cmake/Qt6/Qt6Config.cmake")
-            set(CMAKE_PREFIX_PATH "${_candidate}")
+            if(DEFINED CMAKE_PREFIX_PATH)
+                set(CMAKE_PREFIX_PATH "${_candidate};${CMAKE_PREFIX_PATH}")
+            else()
+                set(CMAKE_PREFIX_PATH "${_candidate}")
+            endif()
+            set(_localcall_qt_prefix_valid TRUE)
             message(STATUS "Auto-detected Qt at ${_candidate}")
             break()
         endif()
     endforeach()
+endif()
+
+if(WIN32 AND NOT _localcall_qt_prefix_valid)
+    message(STATUS
+        "Qt6 was not auto-detected. Install a Qt 6 MSVC 2022 64-bit kit, "
+        "or set CMAKE_PREFIX_PATH/Qt6_DIR to the folder containing Qt6Config.cmake.")
 endif()
 
 if(MSVC AND DEFINED CMAKE_PREFIX_PATH)
@@ -293,11 +334,15 @@ if(HAS_WEBRTC)
     list(APPEND LOCALCALL_SOURCES
         src/MdnsDiscovery.cpp
         src/RtcPeer.cpp
-        src/MediaPipeline.cpp)
+        src/MediaPipeline.cpp
+        src/UdpMediaPeer.cpp
+        src/MediaTcpPeer.cpp)
     list(APPEND LOCALCALL_HEADERS
         include/MdnsDiscovery.h
         include/RtcPeer.h
-        include/MediaPipeline.h)
+        include/MediaPipeline.h
+        include/UdpMediaPeer.h
+        include/MediaTcpPeer.h)
 endif()
 
 
@@ -306,9 +351,16 @@ if(WIN32)
     list(APPEND LOCALCALL_HEADERS include/WindowsRuntimeGuard.h)
 endif()
 
-if(WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/icon.ico")
+if(WIN32)
     set(_RC_FILE "${CMAKE_BINARY_DIR}/app_icon.rc")
-    file(WRITE "${_RC_FILE}" "IDI_ICON1 ICON \"${CMAKE_SOURCE_DIR}/icon.ico\"\n")
+    set(_localcall_rc_contents "")
+    if(EXISTS "${CMAKE_SOURCE_DIR}/icon.ico")
+        string(APPEND _localcall_rc_contents "IDI_ICON1 ICON \"${CMAKE_SOURCE_DIR}/icon.ico\"\n")
+    endif()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/packaging/windows/localcall.exe.manifest")
+        string(APPEND _localcall_rc_contents "1 RT_MANIFEST \"${CMAKE_SOURCE_DIR}/packaging/windows/localcall.exe.manifest\"\n")
+    endif()
+    file(WRITE "${_RC_FILE}" "${_localcall_rc_contents}")
     list(APPEND LOCALCALL_SOURCES "${_RC_FILE}")
 endif()
 
@@ -438,7 +490,7 @@ if(HAS_WEBRTC)
 endif()
 
 if(WIN32)
-    target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ws2_32 dwmapi)
+    target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ws2_32 dwmapi shell32 advapi32)
     # Do NOT delay-load Qt DLLs. Qt exports several data symbols such as
     # QAbstractButton::staticMetaObject, and MSVC cannot delay-load a DLL when
     # the executable imports data symbols from it. Attempting to delay-load

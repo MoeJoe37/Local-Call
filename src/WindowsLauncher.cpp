@@ -215,6 +215,52 @@ bool smokeLoadQt(const std::wstring& appDir)
     return true;
 }
 
+
+bool isElevated()
+{
+    BOOL elevated = FALSE;
+    HANDLE token = nullptr;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        TOKEN_ELEVATION elev{};
+        DWORD size = 0;
+        if (GetTokenInformation(token, TokenElevation, &elev, sizeof(elev), &size))
+            elevated = elev.TokenIsElevated;
+        CloseHandle(token);
+    }
+    return elevated == TRUE;
+}
+
+bool relaunchSelfElevated(const std::wstring& launcherPath)
+{
+    std::wstring args = GetCommandLineW() ? GetCommandLineW() : L"";
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(args.c_str(), &argc);
+    std::wstring rest;
+    if (argv) {
+        for (int i = 1; i < argc; ++i) {
+            if (!rest.empty()) rest += L" ";
+            std::wstring a = argv[i];
+            const bool quote = a.find_first_of(L" \t\"") != std::wstring::npos;
+            if (quote) {
+                rest += L"\"";
+                for (wchar_t c : a) { if (c == L'\"') rest += L"\\\""; else rest.push_back(c); }
+                rest += L"\"";
+            } else {
+                rest += a;
+            }
+        }
+        LocalFree(argv);
+    }
+
+    SHELLEXECUTEINFOW sei{};
+    sei.cbSize = sizeof(sei);
+    sei.lpVerb = L"runas";
+    sei.lpFile = launcherPath.c_str();
+    sei.lpParameters = rest.empty() ? nullptr : rest.c_str();
+    sei.nShow = SW_SHOWNORMAL;
+    return ShellExecuteExW(&sei) == TRUE;
+}
+
 std::wstring buildCommandLine(const std::wstring& appExe, LPWSTR originalCommandLine)
 {
     std::wstring args = originalCommandLine ? originalCommandLine : L"";
@@ -256,6 +302,15 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
     }
     const std::wstring appDir = directoryOf(launcher);
     const std::wstring appExe = appDir + L"\\LocalCallApp.exe";
+
+    // The media stack needs firewall-rule creation and stable UDP/TCP binding.
+    // The embedded manifest asks for elevation, but this fallback still relaunches
+    // through UAC if an installer strips or ignores the manifest.
+    if (!isElevated()) {
+        if (relaunchSelfElevated(launcher)) return 0;
+        showFatal(L"LocalCall needs Administrator permission to configure firewall and media access rules.");
+        return 740;
+    }
 
     repairQtRuntimeFromPrefix(appDir);
     prepareSearchPath(appDir);

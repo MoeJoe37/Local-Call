@@ -17,6 +17,8 @@
 #ifdef HAS_WEBRTC
 #include "RtcPeer.h"
 #include "MediaPipeline.h"
+#include "UdpMediaPeer.h"
+#include "MediaTcpPeer.h"
 #endif
 
 class QPushButton;
@@ -73,7 +75,10 @@ private:
 
 #ifdef HAS_WEBRTC
     RtcPeer*       m_rtcPeer = nullptr;
+    UdpMediaPeer*  m_udpPeer = nullptr;
+    MediaTcpPeer*  m_tcpPeer = nullptr;
     MediaPipeline* m_pipeline = nullptr;
+    bool           m_useRtcMedia = false;
 #endif
 
     // UI elements

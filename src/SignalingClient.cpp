@@ -5,6 +5,7 @@ using json = nlohmann::json;
 #include <QTcpSocket>
 #include <QThread>
 #include <QtConcurrent>
+#include <algorithm>
 
 namespace SignalingClient {
 
@@ -48,15 +49,22 @@ void send(const QString& ip, const SigMsg& msg)
     (void)QtConcurrent::run([ipCopy, msgCopy]() { trySendOnce(ipCopy, msgCopy); });
 }
 
+bool sendReliableBlocking(const QString& ip, const SigMsg& msg, int attempts, int retryDelayMs)
+{
+    const int tries = std::max(1, attempts);
+    for (int i = 0; i < tries; ++i) {
+        if (trySendOnce(ip, msg)) return true;
+        if (i + 1 < tries) QThread::msleep(std::max(0, retryDelayMs));
+    }
+    return false;
+}
+
 void sendReliable(const QString& ip, const SigMsg& msg)
 {
     QString ipCopy  = ip;
     SigMsg  msgCopy = msg;
     (void)QtConcurrent::run([ipCopy, msgCopy]() {
-        for (int i = 0; i < 3; ++i) {
-            if (trySendOnce(ipCopy, msgCopy)) return;
-            if (i < 2) QThread::msleep(600);
-        }
+        (void)sendReliableBlocking(ipCopy, msgCopy, 3, 600);
     });
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "localcall",
-  "version-string": "2.0.13",
+  "version-string": "2.0.15",
   "dependencies": [
     "nlohmann-json",
     "libdatachannel",

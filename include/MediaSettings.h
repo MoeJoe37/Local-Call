@@ -12,6 +12,7 @@ namespace MediaSettings {
     constexpr int SignalingPort      = 50010;
     constexpr int MediaAudioPort     = 50100;
     constexpr int MediaVideoPort     = 50105;
+    constexpr int MediaTcpPort       = 50120;   // fallback/default media stream over TCP
     constexpr int GroupCallPort      = 50200;
 
     // Timing

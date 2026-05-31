@@ -131,7 +131,7 @@ private:
     void handleFriendDel(const QString& fromId);
     void handleChatMsg(const SigMsg& msg, const QString& ip);
     void handleCallInv(const SigMsg& msg, const QString& ip);
-    void handleCallAcc(const SigMsg& msg);
+    void handleCallAcc(const SigMsg& msg, const QString& ip);
     void handleRtcSignal(const SigMsg& msg, const QString& ip);
     void handleGrpInv(const SigMsg& msg, const QString& ip);
     void handleGrpLeave(const SigMsg& msg);
@@ -267,6 +267,7 @@ private:
     QLineEdit*   m_chatInput          = nullptr;
     QPushButton* m_btnChatVoice       = nullptr;
     QPushButton* m_btnChatVideo       = nullptr;
+    QPushButton* m_btnChatScreen      = nullptr;
     QLabel*      m_lblRecording       = nullptr;
     QLabel*      m_lblChatStatus      = nullptr;  // "typing…" / "uploading…"
     QProgressBar* m_chatUploadBar     = nullptr;  // outgoing upload progress

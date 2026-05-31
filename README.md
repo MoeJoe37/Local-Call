@@ -4,6 +4,15 @@ Local Call is a Qt/C++ peer-to-peer communication app for LAN chat, friend reque
 
 This package updates the previous build into a **secure RTC-first** version. The old raw UDP call path is kept only as a compatibility fallback when WebRTC dependencies are unavailable.
 
+## What Changed in Version 2.0.15
+
+- Fixed the Windows `FirewallHelper.cpp` build break caused by missing Windows API includes and a missing namespace wrapper.
+- Linked the Qt application target against `shell32` and `advapi32` for elevated firewall setup.
+- Hardened voice notes by sending them through the chunked-transfer path instead of one large signaling message.
+- Added in-app voice-note playback through Qt Multimedia.
+- Improved audio-call device negotiation by testing Opus-safe Windows audio formats instead of falling back to unsupported preferred formats.
+- Hardened video/screen encoding against odd frame dimensions.
+
 ## What Changed in Version 2.0.13
 
 ### v2.0.13 Windows launcher runtime fix

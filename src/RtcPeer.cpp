@@ -136,9 +136,22 @@ void RtcPeer::setupCallbacks()
         if (!safeThis || !channel) return;
         std::string label;
         try { label = channel->label(); } catch (...) {}
-        const bool isAudio = (label.find("audio") != std::string::npos);
-        const bool isVideo = !isAudio;
-        safeThis->configureDataChannel(channel, isVideo);
+
+        QMetaObject::invokeMethod(safeThis.data(), [safeThis, channel, label]() {
+            if (!safeThis || !channel) return;
+
+            const bool isAudio = (label == AUDIO_LABEL || label.find("audio") != std::string::npos);
+            const bool isVideo = (label == VIDEO_LABEL || label.find("video") != std::string::npos || !isAudio);
+
+            // Important: the answering peer receives the caller-created DataChannels
+            // through onDataChannel().  Older builds only configured callbacks here
+            // but never stored the channel pointers, so the callee could receive
+            // media but could not send microphone/camera frames back.
+            if (isAudio) safeThis->m_audioChannel = channel;
+            else if (isVideo) safeThis->m_videoChannel = channel;
+
+            safeThis->configureDataChannel(channel, isVideo);
+        }, Qt::QueuedConnection);
     });
 }
 
@@ -201,19 +214,44 @@ void RtcPeer::setRemoteDescription(const QString& type, const QString& sdp)
     if (type == QLatin1String("answer")) descType = rtc::Description::Type::Answer;
 
     m_pc->setRemoteDescription(rtc::Description(sdp.toStdString(), descType));
+    m_remoteDescriptionSet = true;
+    flushPendingCandidates();
 
     if (descType == rtc::Description::Type::Offer)
         m_pc->setLocalDescription(rtc::Description::Type::Answer);
 }
 
-void RtcPeer::addRemoteCandidate(const QString& candidate,
-                                 const QString& mid,
-                                 int            /*mlineIndex*/)
+void RtcPeer::applyRemoteCandidate(const QString& candidate,
+                                   const QString& mid,
+                                   int            /*mlineIndex*/)
 {
+    if (!m_pc || candidate.trimmed().isEmpty()) return;
     try {
         m_pc->addRemoteCandidate(
             rtc::Candidate(candidate.toStdString(), mid.toStdString()));
-    } catch (...) {}
+    } catch (...) {
+        // Ignore malformed/stale candidates. ICE will continue with the rest.
+    }
+}
+
+void RtcPeer::flushPendingCandidates()
+{
+    const auto queued = m_pendingCandidates;
+    m_pendingCandidates.clear();
+    for (const auto& c : queued)
+        applyRemoteCandidate(c.candidate, c.mid, c.mlineIndex);
+}
+
+void RtcPeer::addRemoteCandidate(const QString& candidate,
+                                 const QString& mid,
+                                 int            mlineIndex)
+{
+    if (!m_remoteDescriptionSet) {
+        if (m_pendingCandidates.size() < 128)
+            m_pendingCandidates.push_back({candidate, mid, mlineIndex});
+        return;
+    }
+    applyRemoteCandidate(candidate, mid, mlineIndex);
 }
 
 void RtcPeer::close()
@@ -231,6 +269,8 @@ void RtcPeer::close()
         m_pc.reset();
     }
     clearAssemblers();
+    m_pendingCandidates.clear();
+    m_remoteDescriptionSet = false;
     m_videoOpen = false;
     m_audioOpen = false;
     m_connected = false;
@@ -243,14 +283,14 @@ QString RtcPeer::remoteId() const noexcept  { return m_remoteId;  }
 void RtcPeer::sendVideoFrame(const QByteArray& h264AnnexB)
 {
     QMutexLocker lk(&m_sendMutex);
-    if (!m_videoChannel || !m_connected || !m_videoOpen || h264AnnexB.isEmpty()) return;
+    if (!m_videoChannel || h264AnnexB.isEmpty()) return;
     sendFrameOnChannel(m_videoChannel, h264AnnexB, m_videoSeq, 'V');
 }
 
 void RtcPeer::sendAudioFrame(const QByteArray& opusPacket)
 {
     QMutexLocker lk(&m_sendMutex);
-    if (!m_audioChannel || !m_connected || !m_audioOpen || opusPacket.isEmpty()) return;
+    if (!m_audioChannel || opusPacket.isEmpty()) return;
     sendFrameOnChannel(m_audioChannel, opusPacket, m_audioSeq, 'A');
 }
 

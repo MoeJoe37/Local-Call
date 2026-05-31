@@ -72,6 +72,8 @@ private:
                             char mediaTag);
     void handleChannelMessage(bool isVideo, const rtc::binary& payload);
     bool tryAssembleFrame(bool isVideo, const QByteArray& packet, QByteArray& frameOut);
+    void applyRemoteCandidate(const QString& candidate, const QString& mid, int mlineIndex);
+    void flushPendingCandidates();
     void clearAssemblers();
 
     QString   m_localId;
@@ -84,9 +86,17 @@ private:
 
     mutable QMutex m_sendMutex;
     mutable QMutex m_recvMutex;
+    struct PendingCandidate {
+        QString candidate;
+        QString mid;
+        int     mlineIndex{0};
+    };
+
     bool           m_connected{false};
     bool           m_videoOpen{false};
     bool           m_audioOpen{false};
+    bool           m_remoteDescriptionSet{false};
+    QVector<PendingCandidate> m_pendingCandidates;
     quint32        m_videoSeq{1};
     quint32        m_audioSeq{1};
     QHash<quint32, FrameAssembly> m_videoFrames;

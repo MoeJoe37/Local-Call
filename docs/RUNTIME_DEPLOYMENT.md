@@ -104,3 +104,27 @@ On Windows/MSVC, Local Call links Qt normally because Qt imports data symbols an
 The call quality control no longer uses `QSlider`. It now uses a `QComboBox` quality selector. This removes direct `QSlider`-specific imports from `LocalCall.exe`, so old/stale `Qt6Widgets.dll` files cannot trigger `QSlider` destructor or `QSlider::paintEvent` entry-point popups from this app binary. The Windows runtime check also scans the EXE for leftover `QSlider` references and fails early if an old binary is being launched.
 
 The repair script now deploys and validates both `build/Release` and `dist/LocalCall-Windows-x64`, because users often run `build/Release/LocalCall.exe` directly after building.
+
+## Missing VCRUNTIME140D.dll / MSVCP140D.dll / ucrtbased.dll on another PC
+
+These errors mean a Debug build or Debug dependency was installed. Debug MSVC runtime DLLs are not part of the normal Microsoft Visual C++ Redistributable and are not suitable for end-user installers.
+
+Fixed workflow:
+
+```bat
+build.bat clean release
+```
+
+Then package only:
+
+```text
+dist\LocalCall
+```
+
+For Inno Setup, use:
+
+```text
+packaging\windows\LocalCall.iss
+```
+
+The Release deployment now copies only Release vcpkg runtime DLLs and scans the final folder for Debug runtime imports before it is considered installer-ready.

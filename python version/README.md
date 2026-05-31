@@ -16,7 +16,7 @@ The important compatibility change is that Python no longer sends normal WebRTC 
 This Python package is designed to communicate with:
 
 ```text
-Local Call C++ secure RTC v2.0.14 or newer
+Local Call C++ secure RTC v2.0.15 or newer
 ```
 
 It keeps the same signaling envelope used by the C++ app:

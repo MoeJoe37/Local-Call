@@ -11,7 +11,7 @@
       packages = forAllSystems (pkgs: {
         default = pkgs.stdenv.mkDerivation {
           pname = "localcall";
-          version = "2.0.13";
+          version = "2.0.15";
           src = ./.;
 
           nativeBuildInputs = with pkgs; [

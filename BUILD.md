@@ -65,11 +65,33 @@ macOS helper:
 
 ## Windows
 
-Use the project script so the deployed Qt DLLs always come from the same Qt kit used by CMake:
+Fast build from File Explorer or Command Prompt:
+
+```bat
+build.bat
+```
+
+Useful variants:
+
+```bat
+build.bat clean
+build.bat debug
+build.bat clean release
+```
+
+The batch file calls `scripts/build-windows.ps1`, auto-detects the installed Qt MSVC kit from `C:\Qt`, `%USERPROFILE%\Qt`, `QTDIR`, `Qt6_DIR`, `LOCALCALL_QT_DIR`, or `CMAKE_PREFIX_PATH`, builds with Visual Studio 2022 x64, deploys the matching Qt DLLs, and verifies the runtime files.
+
+PowerShell equivalent:
 
 ```powershell
-.\scripts\build-windows.ps1 -QtDir "C:/Qt/6.11.0/msvc2022_64" -VcpkgRoot "C:/vcpkg" -Clean
+.\scripts\build-windows.ps1 -Clean
 .\build\Release\LocalCall.exe
+```
+
+To force a specific Qt kit:
+
+```powershell
+.\scripts\build-windows.ps1 -QtDir "C:/Qt/6.x.x/msvc2022_64" -VcpkgRoot "C:/vcpkg" -Clean
 ```
 
 Manual equivalent:
@@ -202,3 +224,50 @@ This release fixes a CMake configure failure caused by a Windows-style path in a
 ## v2.0.13 Windows launcher runtime fix
 
 On Windows, run `build/Release/LocalCall.exe` or `dist/LocalCall-Windows-x64/LocalCall.exe`. This executable is a native launcher. The Qt application is `LocalCallApp.exe` and should not be launched directly. The launcher prevents Qt entry-point popups by refreshing stale DLLs from the Qt kit recorded during deployment and by starting the Qt process only after the runtime folder passes sanity checks.
+
+## Windows installer build fix: missing VCRUNTIME140D / ucrtbased / MSVCP140D
+
+If the app works on the developer PC but fails on another Windows 11 PC with messages like:
+
+```text
+VCRUNTIME140D.dll was not found
+VCRUNTIME140_1D.dll was not found
+ucrtbased.dll was not found
+MSVCP140D.dll was not found
+```
+
+the installer was built from Debug binaries or from a Release folder polluted with Debug vcpkg DLLs. The `D` suffix means Debug runtime. Those DLLs are installed with Visual Studio on the developer PC and must not be redistributed.
+
+Use the root batch file only:
+
+```bat
+build.bat clean release
+```
+
+This creates the installer-ready folder:
+
+```text
+dist\LocalCall
+```
+
+Package only `dist\LocalCall` in Inno Setup. Do not package `build\Debug`, and do not manually collect files from `build\Release`.
+
+To build the installer automatically, install Inno Setup 6 and run:
+
+```bat
+build.bat clean release installer
+```
+
+or:
+
+```bat
+make-installer.bat
+```
+
+The included Inno script is:
+
+```text
+packaging\windows\LocalCall.iss
+```
+
+The deployment scripts now copy vcpkg DLLs from `x64-windows\bin` for Release and from `x64-windows\debug\bin` only for Debug. The runtime checker also fails the build if a Release distribution imports Debug MSVC runtime DLLs.

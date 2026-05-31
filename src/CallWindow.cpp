@@ -4,6 +4,7 @@
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QCheckBox>
@@ -14,6 +15,7 @@
 #include <QByteArray>
 #include <QSizePolicy>
 #include <QMessageBox>
+#include <QtGlobal>
 
 #ifdef HAS_WEBRTC
 #include <QProcessEnvironment>
@@ -75,28 +77,33 @@ CallWindow::CallWindow(const QString& peerIp, const QString& peerName,
 
     auto* videoStack = new QWidget(this);
     videoStack->setMinimumHeight(280);
-    auto* vl = new QVBoxLayout(videoStack);
+    auto* vl = new QGridLayout(videoStack);
     vl->setContentsMargins(0,0,0,0);
+    vl->setSpacing(0);
 
     m_remoteVideo = new QLabel(videoStack);
     m_remoteVideo->setObjectName("remote");
     m_remoteVideo->setAlignment(Qt::AlignCenter);
     m_remoteVideo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    vl->addWidget(m_remoteVideo);
+    vl->addWidget(m_remoteVideo, 0, 0);
 
-    m_overlayLabel = new QLabel("Negotiating secure low-latency RTC…", videoStack);
+    m_overlayLabel = new QLabel("Starting LAN media…", videoStack);
     m_overlayLabel->setObjectName("overlay");
     m_overlayLabel->setAlignment(Qt::AlignCenter);
-    vl->addWidget(m_overlayLabel, 0, Qt::AlignCenter);
+    vl->addWidget(m_overlayLabel, 0, 0, Qt::AlignCenter);
 
     m_localVideo = new QLabel(videoStack);
     m_localVideo->setObjectName("local");
     m_localVideo->setFixedSize(160, 120);
     m_localVideo->setAlignment(Qt::AlignCenter);
+    m_localVideo->setText("Local preview");
+    m_localVideo->setStyleSheet("background:#11111B;border:1px solid #45475A;border-radius:8px;color:#6C7086;font-size:11px;");
+    vl->addWidget(m_localVideo, 0, 0, Qt::AlignRight | Qt::AlignBottom);
 
     if (mode == CallMode::Voice) {
         m_remoteVideo->setVisible(false);
         m_localVideo->setVisible(false);
+        m_overlayLabel->setText("Voice call connecting…");
     }
     root->addWidget(videoStack);
 
@@ -104,7 +111,7 @@ CallWindow::CallWindow(const QString& peerIp, const QString& peerName,
     infoBar->setContentsMargins(12,8,12,4);
     auto* callWith = new QLabel(QString("🔒  %1").arg(peerName), this);
     callWith->setStyleSheet("font-size:14px;font-weight:bold;color:#CDD6F4;");
-    m_statusLabel = new QLabel("Secure RTC connecting…", this);
+    m_statusLabel = new QLabel("Media connecting…", this);
     m_statusLabel->setObjectName("status");
     infoBar->addWidget(callWith);
     infoBar->addStretch();
@@ -232,54 +239,75 @@ SigMsg CallWindow::makeRtcSignal(const std::string& type) const
 void CallWindow::onQualityChanged()
 {
     if (m_lblQuality && m_cmbQuality) m_lblQuality->setText(m_cmbQuality->currentText());
+
+    QSize targetSize;
+    QString resName = m_cmbRes ? m_cmbRes->currentText() : QStringLiteral("360p");
+    auto it = MediaSettings::Resolutions.find(resName.toStdString());
+    if (it != MediaSettings::Resolutions.end() && it->second.has_value())
+        targetSize = QSize(it->second->w, it->second->h);
+
+    QString fpsStr = m_cmbFps ? m_cmbFps->currentText() : QStringLiteral("30");
+    float fps = (fpsStr == "Source") ? 30.0f : qMax(1, fpsStr.toInt());
+
+    const int quality = m_cmbQuality ? m_cmbQuality->currentData().toInt() : 60;
+    const int bitrate = qMax(128000, quality * 16000);
+
+#ifdef HAS_WEBRTC
+    if (m_pipeline)
+        m_pipeline->setVideoTarget(targetSize, fps, bitrate);
+#endif
+
 #if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
     if (!m_videoSender) return;
-
-    QString resName = m_cmbRes->currentText();
-    auto it = MediaSettings::Resolutions.find(resName.toStdString());
     if (it != MediaSettings::Resolutions.end()) {
         if (it->second.has_value())
             m_videoSender->targetRes = std::make_pair(it->second->w, it->second->h);
         else
             m_videoSender->targetRes = std::nullopt;
     }
-
-    QString fpsStr = m_cmbFps->currentText();
     if (fpsStr == "Source") m_videoSender->targetFps = 999;
     else                    m_videoSender->targetFps = fpsStr.toInt();
-
-    m_videoSender->jpegQuality.store(m_cmbQuality ? m_cmbQuality->currentData().toInt() : 60);
+    m_videoSender->jpegQuality.store(quality);
 #endif
 }
 
 void CallWindow::startMedia()
 {
 #ifdef HAS_WEBRTC
-    RtcConfig cfg;
-    cfg.localNetworkOnly = false;
-    cfg.iceServers = iceServersFromEnvironment();
+    // Default to the deterministic LAN media path. It uses the already-opened
+    // firewall fixed UDP ports and avoids the Windows/libdatachannel ICE cases
+    // that made calls connect on one PC but carry no media on another. WebRTC
+    // can still be enabled explicitly for testing with LOCALCALL_ENABLE_WEBRTC_MEDIA=1.
+    m_useRtcMedia = qEnvironmentVariableIsSet("LOCALCALL_ENABLE_WEBRTC_MEDIA");
 
-    m_rtcPeer = new RtcPeer(m_myId, m_peerName, cfg, this);
-    connect(m_rtcPeer, &RtcPeer::localDescriptionReady, this, [this](QString type, QString sdp) {
-        SigMsg sig = makeRtcSignal(type == "answer" ? SigType::RtcAnswer : SigType::RtcOffer);
-        sig.sdp_type = type.toStdString();
-        sig.sdp = sdp.toStdString();
-        emit rtcSignalReady(sig);
-    });
-    connect(m_rtcPeer, &RtcPeer::localCandidateReady, this, [this](QString candidate, QString mid, int mline) {
-        SigMsg sig = makeRtcSignal(SigType::RtcIce);
-        sig.candidate = candidate.toStdString();
-        sig.candidate_mid = mid.toStdString();
-        sig.candidate_mline = mline;
-        emit rtcSignalReady(sig);
-    });
-    connect(m_rtcPeer, &RtcPeer::connected, this, &CallWindow::onMediaConnected);
-    connect(m_rtcPeer, &RtcPeer::failed, this, [this]() {
-        m_statusLabel->setText("RTC failed");
-        m_statusLabel->setStyleSheet("color:#F38BA8;font-size:13px;");
-        m_overlayLabel->setText("Secure RTC failed. Check STUN/TURN or peer reachability.");
-        m_overlayLabel->setVisible(true);
-    });
+    if (m_useRtcMedia) {
+        RtcConfig cfg;
+        const auto envIce = iceServersFromEnvironment();
+        cfg.localNetworkOnly = qgetenv("LOCALCALL_ICE_SERVERS").trimmed().isEmpty();
+        if (!cfg.localNetworkOnly) cfg.iceServers = envIce;
+
+        m_rtcPeer = new RtcPeer(m_myId, m_peerName, cfg, this);
+        connect(m_rtcPeer, &RtcPeer::localDescriptionReady, this, [this](QString type, QString sdp) {
+            SigMsg sig = makeRtcSignal(type == "answer" ? SigType::RtcAnswer : SigType::RtcOffer);
+            sig.sdp_type = type.toStdString();
+            sig.sdp = sdp.toStdString();
+            emit rtcSignalReady(sig);
+        });
+        connect(m_rtcPeer, &RtcPeer::localCandidateReady, this, [this](QString candidate, QString mid, int mline) {
+            SigMsg sig = makeRtcSignal(SigType::RtcIce);
+            sig.candidate = candidate.toStdString();
+            sig.candidate_mid = mid.toStdString();
+            sig.candidate_mline = mline;
+            emit rtcSignalReady(sig);
+        });
+        connect(m_rtcPeer, &RtcPeer::connected, this, &CallWindow::onMediaConnected);
+        connect(m_rtcPeer, &RtcPeer::failed, this, [this]() {
+            m_statusLabel->setText("RTC failed");
+            m_statusLabel->setStyleSheet("color:#F38BA8;font-size:13px;");
+            m_overlayLabel->setText("RTC failed. LAN media is recommended on local networks.");
+            m_overlayLabel->setVisible(true);
+        });
+    }
 
     EncoderSettings settings;
     settings.width = 640;
@@ -287,21 +315,86 @@ void CallWindow::startMedia()
     settings.fps = 30.0f;
     settings.bitrate = 800000;
     settings.opusBitrate = 32000;
-    if (m_mode == CallMode::Voice) settings.bitrate = 1;
-
-    m_pipeline = new MediaPipeline(settings, this);
-    connect(m_pipeline, &MediaPipeline::encodedVideoFrame, m_rtcPeer, &RtcPeer::sendVideoFrame, Qt::QueuedConnection);
-    connect(m_pipeline, &MediaPipeline::encodedAudioFrame, m_rtcPeer, &RtcPeer::sendAudioFrame, Qt::QueuedConnection);
-    connect(m_rtcPeer, &RtcPeer::remoteVideoFrame, m_pipeline, &MediaPipeline::onRemoteVideoFrame, Qt::QueuedConnection);
-    connect(m_rtcPeer, &RtcPeer::remoteAudioFrame, m_pipeline, &MediaPipeline::onRemoteAudioFrame, Qt::QueuedConnection);
-    connect(m_pipeline, &MediaPipeline::remoteVideoImage, this, &CallWindow::onRemoteFrame, Qt::QueuedConnection);
-
-    if (!m_pipeline->startCapture()) {
-        m_overlayLabel->setText("Could not start microphone/camera capture.");
-        m_statusLabel->setText("Capture failed");
+    if (m_mode == CallMode::Voice) {
+        settings.bitrate = 1;
+        settings.videoEnabled = false;
     }
 
-    if (m_initiator) {
+    m_pipeline = new MediaPipeline(settings, this);
+
+    // Default media path: a persistent TCP media channel. It uses one fixed,
+    // firewall-opened port and avoids the packet loss / NAT loopback problems
+    // that made the old UDP fallback appear connected while carrying no audio
+    // or video on some Windows 11 machines.  UDP remains available only for
+    // explicit testing with LOCALCALL_ENABLE_UDP_MEDIA=1.
+    const bool useUdpMedia = qEnvironmentVariableIsSet("LOCALCALL_ENABLE_UDP_MEDIA") && !m_useRtcMedia;
+
+    if (m_rtcPeer && m_useRtcMedia) {
+        connect(m_pipeline, &MediaPipeline::encodedVideoFrame, m_rtcPeer, &RtcPeer::sendVideoFrame, Qt::QueuedConnection);
+        connect(m_pipeline, &MediaPipeline::encodedAudioFrame, m_rtcPeer, &RtcPeer::sendAudioFrame, Qt::QueuedConnection);
+        connect(m_rtcPeer, &RtcPeer::remoteVideoFrame, m_pipeline, &MediaPipeline::onRemoteVideoFrame, Qt::QueuedConnection);
+        connect(m_rtcPeer, &RtcPeer::remoteAudioFrame, m_pipeline, &MediaPipeline::onRemoteAudioFrame, Qt::QueuedConnection);
+    } else if (useUdpMedia) {
+        m_udpPeer = new UdpMediaPeer(m_peerIp, m_myId, this);
+        connect(m_pipeline, &MediaPipeline::encodedVideoFrame, m_udpPeer, &UdpMediaPeer::sendVideoFrame, Qt::QueuedConnection);
+        connect(m_pipeline, &MediaPipeline::encodedAudioFrame, m_udpPeer, &UdpMediaPeer::sendAudioFrame, Qt::QueuedConnection);
+        connect(m_udpPeer, &UdpMediaPeer::remoteVideoFrame, m_pipeline, &MediaPipeline::onRemoteVideoFrame, Qt::QueuedConnection);
+        connect(m_udpPeer, &UdpMediaPeer::remoteAudioFrame, m_pipeline, &MediaPipeline::onRemoteAudioFrame, Qt::QueuedConnection);
+        connect(m_udpPeer, &UdpMediaPeer::connected, this, &CallWindow::onMediaConnected, Qt::QueuedConnection);
+        connect(m_udpPeer, &UdpMediaPeer::failed, this, [this](const QString& reason) {
+            m_statusLabel->setText("UDP media failed");
+            m_statusLabel->setStyleSheet("color:#F38BA8;font-size:13px;");
+            m_overlayLabel->setText(reason);
+            m_overlayLabel->setVisible(true);
+        });
+        if (!m_udpPeer->start()) {
+            m_overlayLabel->setText("Could not start UDP media sockets.");
+            m_statusLabel->setText("Media failed");
+        }
+    } else {
+        m_tcpPeer = new MediaTcpPeer(m_peerIp, this);
+        connect(m_pipeline, &MediaPipeline::encodedVideoFrame, m_tcpPeer, &MediaTcpPeer::sendVideoFrame, Qt::QueuedConnection);
+        connect(m_pipeline, &MediaPipeline::encodedAudioFrame, m_tcpPeer, &MediaTcpPeer::sendAudioFrame, Qt::QueuedConnection);
+        connect(m_tcpPeer, &MediaTcpPeer::remoteVideoFrame, m_pipeline, &MediaPipeline::onRemoteVideoFrame, Qt::QueuedConnection);
+        connect(m_tcpPeer, &MediaTcpPeer::remoteAudioFrame, m_pipeline, &MediaPipeline::onRemoteAudioFrame, Qt::QueuedConnection);
+        connect(m_tcpPeer, &MediaTcpPeer::connected, this, &CallWindow::onMediaConnected, Qt::QueuedConnection);
+        connect(m_tcpPeer, &MediaTcpPeer::failed, this, [this](const QString& reason) {
+            m_statusLabel->setText("TCP media failed");
+            m_statusLabel->setStyleSheet("color:#F38BA8;font-size:13px;");
+            m_overlayLabel->setText(reason);
+            m_overlayLabel->setVisible(true);
+        });
+        if (!m_tcpPeer->start()) {
+            m_overlayLabel->setText("Could not start TCP media channel.");
+            m_statusLabel->setText("Media failed");
+        }
+    }
+
+    connect(m_pipeline, &MediaPipeline::remoteVideoImage, this, &CallWindow::onRemoteFrame, Qt::QueuedConnection);
+    connect(m_pipeline, &MediaPipeline::localVideoImage,  this, &CallWindow::onLocalFrame,  Qt::QueuedConnection);
+    m_pipeline->setMuted(m_muted);
+    m_pipeline->setScreenAudioEnabled(m_chkScreenAudio ? m_chkScreenAudio->isChecked() : true);
+    if (m_mode == CallMode::VideoScreen) {
+        m_screenOn = true;
+        if (m_btnScreen) m_btnScreen->setText("🖥 Stop");
+        m_pipeline->setScreenSharing(true);
+    }
+
+    if (!m_pipeline->startCapture()) {
+        m_overlayLabel->setText(m_mode == CallMode::Voice
+                                ? "Could not start microphone capture. Check Windows microphone permission."
+                                : "Could not start microphone/camera capture. Check Windows camera/microphone permission.");
+        m_statusLabel->setText("Capture failed");
+    } else if (!m_useRtcMedia) {
+        m_statusLabel->setText("LAN media ready");
+        m_statusLabel->setStyleSheet("color:#A6E3A1;font-size:13px;");
+        if (m_mode == CallMode::Voice)
+            m_overlayLabel->setText("Voice call connected. Waiting for audio…");
+        else
+            m_overlayLabel->setText("Call connected. Waiting for remote video…");
+    }
+
+    if (m_rtcPeer && m_useRtcMedia && m_initiator) {
         QTimer::singleShot(150, this, [this]() {
             if (m_rtcPeer) m_rtcPeer->createOffer();
         });
@@ -356,6 +449,8 @@ void CallWindow::stopMedia()
 {
 #ifdef HAS_WEBRTC
     if (m_pipeline) { m_pipeline->stopCapture(); m_pipeline->deleteLater(); m_pipeline = nullptr; }
+    if (m_tcpPeer) { m_tcpPeer->stop(); m_tcpPeer->deleteLater(); m_tcpPeer = nullptr; }
+    if (m_udpPeer) { m_udpPeer->stop(); m_udpPeer->deleteLater(); m_udpPeer = nullptr; }
     if (m_rtcPeer) { m_rtcPeer->close(); m_rtcPeer->deleteLater(); m_rtcPeer = nullptr; }
 #endif
 #if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
@@ -388,7 +483,7 @@ void CallWindow::handleRtcSignal(const SigMsg& msg)
 void CallWindow::onMediaConnected()
 {
     m_overlayLabel->setVisible(false);
-    m_statusLabel->setText("● Encrypted low-latency RTC connected");
+    m_statusLabel->setText("● LAN media connected");
     m_statusLabel->setStyleSheet("color:#A6E3A1;font-size:13px;");
 }
 
@@ -412,6 +507,9 @@ void CallWindow::onLocalFrame(QImage frame)
 void CallWindow::onMute()
 {
     m_muted = !m_muted;
+#ifdef HAS_WEBRTC
+    if (m_pipeline) m_pipeline->setMuted(m_muted);
+#endif
 #if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
     if (m_audioSender) m_audioSender->muted = m_muted;
 #endif
@@ -422,6 +520,9 @@ void CallWindow::onCamera()
 {
     m_cameraOn = !m_cameraOn;
     m_btnCamera->setText(m_cameraOn ? "📷 Camera" : "📷 Cam Off");
+#ifdef HAS_WEBRTC
+    if (m_pipeline) m_pipeline->setCameraEnabled(m_cameraOn);
+#endif
 #if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
     if (m_videoSender) { m_videoSender->stop(); if (m_cameraOn) m_videoSender->start(); }
 #endif
@@ -433,6 +534,12 @@ void CallWindow::onScreen()
     m_btnScreen->setText(m_screenOn ? "🖥 Stop" : "🖥 Screen");
     m_screenAudioPanel->setVisible(m_screenOn);
 
+#ifdef HAS_WEBRTC
+    if (m_pipeline) {
+        m_pipeline->setScreenSharing(m_screenOn);
+        m_pipeline->setScreenAudioEnabled(!m_screenOn || (m_chkScreenAudio && m_chkScreenAudio->isChecked()));
+    }
+#endif
 #if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
     if (m_videoSender) {
         m_videoSender->stop();
@@ -451,6 +558,10 @@ void CallWindow::onScreen()
 
 void CallWindow::onScreenAudioChanged(int)
 {
+#ifdef HAS_WEBRTC
+    if (m_pipeline)
+        m_pipeline->setScreenAudioEnabled(!m_screenOn || (m_chkScreenAudio && m_chkScreenAudio->isChecked()));
+#endif
 #if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
     if (m_audioSender)
         m_audioSender->muteAudioOnScreen = m_screenOn && !m_chkScreenAudio->isChecked();

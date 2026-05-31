@@ -12,6 +12,7 @@ using json = nlohmann::json;
 #include <QTcpSocket>
 #include <QtConcurrent>
 #include <QRegularExpression>
+#include <QStringList>
 #include <QTemporaryDir>
 #include <QUuid>
 #include "Helpers.h"
@@ -24,6 +25,7 @@ using json = nlohmann::json;
 #include <QLabel>
 #include <QTextEdit>
 #include <QTextOption>
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QFileDialog>
@@ -31,6 +33,16 @@ using json = nlohmann::json;
 #include <QFileInfo>
 #include <QFile>
 #include <QTimer>
+#include <QDateTime>
+#include <QDesktopServices>
+#include <QThread>
+#include <QVector>
+#include <QUrl>
+#ifdef HAS_MULTIMEDIA
+#include <QMediaPlayer>
+#include <QAudioOutput>
+#endif
+#include "MediaSettings.h"
 
 // Forward declaration
 static QString buildConvKey(const QString& a, const QString& b);
@@ -71,12 +83,16 @@ void ListWidgetResizeFilter::recalculateMessageLayout() {
                 QWidget* bubble = layout->itemAt(j)->widget();
                 if (bubble && (bubble->objectName() == "bubbleMine" || 
                                bubble->objectName() == "bubbleTheirs")) {
-                    // Calculate new bubble width dynamically
-                    const int maxBubbleW = qMin(outerW - 32, 520);
-                    bubble->setFixedWidth(maxBubbleW);
-                    
+                    // Keep compact message bubbles compact. Older builds
+                    // expanded every bubble to the maximum width on resize,
+                    // which made the chat look like blocks instead of messages.
+                    const int maxBubbleW = qMax(96, qMin(outerW - 32, 560));
+                    const int newBubbleW = qBound(96, bubble->width(), maxBubbleW);
+                    bubble->setFixedWidth(newBubbleW);
+
                     // Update text edit widths within the bubble
-                    updateBubbleTextWidth(bubble, maxBubbleW);
+                    updateBubbleTextWidth(bubble, newBubbleW);
+                    item->setSizeHint(QSize(outerW, itemWidget->sizeHint().height() + 8));
                 }
             }
         }
@@ -86,12 +102,16 @@ void ListWidgetResizeFilter::recalculateMessageLayout() {
 void ListWidgetResizeFilter::updateBubbleTextWidth(QWidget* bubble, int bubbleW) {
     if (!bubble) return;
     
-    // Find QTextEdit within bubble and update its width
+    // Find message text widgets within bubble and update their width.
     const int textW = bubbleW - 24;  // padding
     for (QObject* obj : bubble->children()) {
-        if (QTextEdit* textEdit = qobject_cast<QTextEdit*>(obj)) {
+        if (QLabel* textLabel = qobject_cast<QLabel*>(obj)) {
+            if (textLabel->objectName() == QLatin1String("msgText")) {
+                textLabel->setFixedWidth(textW);
+                textLabel->adjustSize();
+            }
+        } else if (QTextEdit* textEdit = qobject_cast<QTextEdit*>(obj)) {
             textEdit->setFixedWidth(textW);
-            // Recalculate height based on new width
             int contentHeight = (int)textEdit->document()->size().height();
             textEdit->setFixedHeight(qMax(24, contentHeight));
         }
@@ -158,6 +178,7 @@ void MainWindow::setChatReadOnly(bool ro)
     m_chatInputBar->setVisible(!ro);
     m_btnChatVoice->setEnabled(!ro);
     m_btnChatVideo->setEnabled(!ro);
+    if (m_btnChatScreen) m_btnChatScreen->setEnabled(!ro);
 }
 
 void MainWindow::showGroupChat(GroupInfo* g)
@@ -454,6 +475,26 @@ void MainWindow::onSignalReceived(SigMsg msg, QString ip)
     // Dispatch on UI thread
     const std::string& t = msg.type;
 
+    // Never process our own direct signaling packets. On some Windows network
+    // adapters the host can receive a looped-back TCP/UDP discovery route or a
+    // stale friend entry can point to the local IP; without this guard the caller
+    // sees the receiver's Answer/Decline popup for their own outgoing call.
+    if (!msg.from_id.empty() && msg.from_id == m_myId.toStdString())
+        return;
+
+    // Direct/unicast packets now carry target_id.  This prevents a stale IP,
+    // looped-back packet, or copied friend entry from making the sender process
+    // its own outgoing call/chat signal.  Group packets without target_id still
+    // flow normally.
+    const bool directTargetedType =
+        t == SigType::ChatText || t == SigType::ChatFile || t == SigType::ChatVoice ||
+        t == SigType::CallInv  || t == SigType::CallAcc  || t == SigType::CallRej ||
+        t == SigType::CallEnd  || t == SigType::RtcOffer || t == SigType::RtcAnswer ||
+        t == SigType::RtcIce   || t == SigType::Typing   ||
+        t == SigType::UploadStart || t == SigType::UploadEnd;
+    if (directTargetedType && msg.target_id && *msg.target_id != m_myId.toStdString())
+        return;
+
     if ((t == SigType::FriendReq || t == SigType::FriendAcc ||
          t == SigType::CallInv || t == SigType::CallAcc || t == SigType::CallRej || t == SigType::CallEnd ||
          t == SigType::RtcOffer || t == SigType::RtcAnswer || t == SigType::RtcIce) &&
@@ -479,7 +520,7 @@ void MainWindow::onSignalReceived(SigMsg msg, QString ip)
     else if (t == SigType::ChatText || t == SigType::ChatFile || t == SigType::ChatVoice)
         handleChatMsg(msg, ip);
     else if (t == SigType::CallInv)    handleCallInv(msg, ip);
-    else if (t == SigType::CallAcc)    handleCallAcc(msg);
+    else if (t == SigType::CallAcc)    handleCallAcc(msg, ip);
     else if (t == SigType::CallRej)    {
         if (m_callingNotif) { m_callingNotif->close(); m_callingNotif = nullptr; }
         showToast("Declined", QString::fromStdString(msg.from_name) + " declined the call.");
@@ -509,7 +550,7 @@ void MainWindow::onSignalReceived(SigMsg msg, QString ip)
     else if (t == SigType::GrpAddMember) handleGrpInv(msg, ip);
     // Group call signaling (C# version sends these)
     else if (t == SigType::GrpCallInv) handleCallInv(msg, ip);
-    else if (t == SigType::GrpCallAcc) handleCallAcc(msg);
+    else if (t == SigType::GrpCallAcc) handleCallAcc(msg, ip);
     else if (t == SigType::GrpCallRej) showToast("Declined", QString::fromStdString(msg.from_name) + " declined the group call.");
     else if (t == SigType::GrpCallEnd) {
 #if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
@@ -671,7 +712,10 @@ void MainWindow::handleChatMsg(const SigMsg& msg, const QString& ip)
 
         std::vector<uint8_t> data(full.begin(), full.end());
         std::string mime = tr.mime.toStdString();
-        MessageKind kind = Helpers::isImage(mime) ? MessageKind::Image : MessageKind::File;
+        const bool isVoice = mime.rfind("audio/", 0) == 0 ||
+                             tr.fileName.compare("voice_note.wav", Qt::CaseInsensitive) == 0;
+        MessageKind kind = isVoice ? MessageKind::VoiceNote
+                                   : (Helpers::isImage(mime) ? MessageKind::Image : MessageKind::File);
 
         ChatMessage cm;
         cm.kind      = kind;
@@ -683,6 +727,8 @@ void MainWindow::handleChatMsg(const SigMsg& msg, const QString& ip)
         cm.data      = data;
         cm.timestamp = msg.ts;
 
+        const QString completedFromName = tr.fromName;
+        const QString completedFileName = tr.fileName;
         m_pendingTransfers.remove(tid);
 
         QString key = buildConvKey(m_myId, fromId);
@@ -693,7 +739,7 @@ void MainWindow::handleChatMsg(const SigMsg& msg, const QString& ip)
         } else {
             f->unreadCount++;
             rebuildFriendsList();
-            showToast(tr.fromName, "📎 " + tr.fileName);
+            showToast(completedFromName, "📎 " + completedFileName);
         }
         return;
     }
@@ -717,12 +763,38 @@ void MainWindow::handleChatMsg(const SigMsg& msg, const QString& ip)
 
 void MainWindow::handleCallInv(const SigMsg& msg, const QString& ip)
 {
+    if (msg.from_id == m_myId.toStdString()) return;
+#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+    // If we are already placing a call, never show an incoming Answer/Decline
+    // popup on this side.  This also protects against stale IPs that loop an
+    // outgoing invitation back to the caller.
+    if (m_callingNotif || !m_pendingCallMode.isEmpty()) {
+        SigMsg busy = buildSig(SigType::CallRej);
+        busy.target_id = msg.from_id;
+        sendDirectSignal(ip, busy, false);
+        return;
+    }
+    if (m_callWin) {
+        SigMsg busy = buildSig(SigType::CallRej);
+        busy.target_id = msg.from_id;
+        sendDirectSignal(ip, busy, false);
+        return;
+    }
+#endif
     m_friendMgr->updateFriendIp(QString::fromStdString(msg.from_id), ip);
     QString mode = QString::fromStdString(msg.mode.value_or("voice"));
+    if (msg.type == SigType::ScreenInv) mode = "screen";
     QString name = QString::fromStdString(msg.from_name);
 
-    SigMsg accMsg = buildSig(SigType::CallAcc);
-    SigMsg rejMsg = buildSig(SigType::CallRej);
+    const bool isGroupCall = (msg.type == SigType::GrpCallInv);
+    SigMsg accMsg = buildSig(isGroupCall ? SigType::GrpCallAcc : SigType::CallAcc);
+    SigMsg rejMsg = buildSig(isGroupCall ? SigType::GrpCallRej : SigType::CallRej);
+    accMsg.group_id = msg.group_id;
+    accMsg.group_name = msg.group_name;
+    accMsg.target_id = msg.from_id;
+    rejMsg.group_id = msg.group_id;
+    rejMsg.group_name = msg.group_name;
+    rejMsg.target_id = msg.from_id;
 
     auto* notif = new NotificationWindow(
         "Incoming call",
@@ -730,7 +802,10 @@ void MainWindow::handleCallInv(const SigMsg& msg, const QString& ip)
         {
             {"Answer", [this, ip, name, mode, accMsg]() mutable {
                 sendDirectSignal(ip, accMsg, true);
-                openCallWindow(ip, name, mode == "video" ? CallMode::VideoCamera : CallMode::Voice, false);
+                const CallMode callMode = (mode == "screen") ? CallMode::VideoScreen
+                                           : (mode == "video") ? CallMode::VideoCamera
+                                                               : CallMode::Voice;
+                openCallWindow(ip, name, callMode, false);
             }},
             {"Decline", [this, ip, rejMsg]() mutable {
                 sendDirectSignal(ip, rejMsg, false);
@@ -740,24 +815,35 @@ void MainWindow::handleCallInv(const SigMsg& msg, const QString& ip)
     notif->show();
 }
 
-void MainWindow::handleCallAcc(const SigMsg& msg)
+void MainWindow::handleCallAcc(const SigMsg& msg, const QString& ip)
 {
-    // Dismiss the caller's "Calling…" dialog before opening the call window
+    if (msg.from_id == m_myId.toStdString()) return;
+    if (msg.target_id && *msg.target_id != m_myId.toStdString()) return;
+    if (m_pendingCallMode.isEmpty()) return;
+
+    // Dismiss the caller's "Calling…" dialog before opening the call window.
+    // Important: use the real source IP from the accepted TCP connection, not
+    // an old saved friend IP.  Stale IPs were the main reason media packets went
+    // to the wrong machine or looped back to the caller.
     if (m_callingNotif) { m_callingNotif->close(); m_callingNotif = nullptr; }
 
     FriendInfo* f = m_friendMgr->getFriend(QString::fromStdString(msg.from_id));
     if (!f) return;
-    openCallWindow(QString::fromStdString(f->ip), QString::fromStdString(f->name),
-                   m_pendingCallMode == "video" ? CallMode::VideoCamera : CallMode::Voice, true);
+    m_friendMgr->updateFriendIp(QString::fromStdString(msg.from_id), ip);
+    const CallMode mode = (m_pendingCallMode == "screen") ? CallMode::VideoScreen
+                         : (m_pendingCallMode == "video")  ? CallMode::VideoCamera
+                                                           : CallMode::Voice;
+    m_pendingCallMode.clear();
+    openCallWindow(ip, QString::fromStdString(f->name), mode, true);
 }
 
 void MainWindow::handleRtcSignal(const SigMsg& msg, const QString& ip)
 {
 #if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
-    if (!m_callWin) {
-        FriendInfo* f = m_friendMgr->getFriend(QString::fromStdString(msg.from_id));
-        if (f) openCallWindow(ip, QString::fromStdString(f->name), CallMode::VideoCamera, false);
-    }
+    Q_UNUSED(ip);
+    // RTC messages are accepted only after the normal call invitation/acceptance
+    // state machine has opened a call window. This prevents stray or looped-back
+    // RTC packets from popping up a call on the wrong side.
     if (m_callWin) m_callWin->handleRtcSignal(msg);
 #else
     Q_UNUSED(msg); Q_UNUSED(ip);
@@ -778,6 +864,7 @@ void MainWindow::openCallWindow(const QString& ip, const QString& name, CallMode
             if (fi.ip == ip.toStdString()) { f = &fi; break; }
         if (f) {
             SigMsg sig = buildSig(SigType::CallEnd);
+            sig.target_id = f->id;
             sendDirectSignal(ip, sig, true);
         }
         m_callWin = nullptr;
@@ -793,6 +880,27 @@ void MainWindow::openCallWindow(const QString& ip, const QString& name, CallMode
 
 void MainWindow::sendCallInvite(FriendInfo* f, const QString& mode)
 {
+#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+    if (m_callWin || m_callingNotif) {
+        showToast("Call already active", "Finish or cancel the current call first.");
+        return;
+    }
+#endif
+    if (f->id == m_myId.toStdString()) {
+        showToast("Invalid call", "This contact points to your own LocalCall identity.");
+        return;
+    }
+    const QString peerIpForGuard = QString::fromStdString(f->ip);
+    if (peerIpForGuard == QLatin1String("127.0.0.1") || peerIpForGuard == QLatin1String("localhost")) {
+        showToast("Invalid call", "This contact points to the local computer, not the other PC.");
+        return;
+    }
+    for (const auto& local : Helpers::localIPv4Addresses(false)) {
+        if (peerIpForGuard == QString::fromStdString(local)) {
+            showToast("Invalid call", "This contact IP is one of your own PC's IP addresses. Rescan or re-add the other PC.");
+            return;
+        }
+    }
     if (!f->isOnline) {
         QMessageBox::information(this, "Offline",
             QString::fromStdString(f->name) + " is offline.");
@@ -801,6 +909,7 @@ void MainWindow::sendCallInvite(FriendInfo* f, const QString& mode)
     m_pendingCallMode = mode;
     SigMsg sig = buildSig(SigType::CallInv);
     sig.mode = mode.toStdString();
+    sig.target_id = f->id;
 
     QString peerIp   = QString::fromStdString(f->ip);
     QString peerName = QString::fromStdString(f->name);
@@ -812,19 +921,24 @@ void MainWindow::sendCallInvite(FriendInfo* f, const QString& mode)
     // The dialog is dismissed automatically when the peer answers, declines,
     // or when the caller clicks Cancel.
     SigMsg cancelMsg = buildSig(SigType::CallRej);   // reuse CallRej as a cancel signal
+    cancelMsg.target_id = f->id;
     if (m_callingNotif) m_callingNotif->close();     // guard: don't stack multiples
 
     m_callingNotif = new NotificationWindow(
-        mode == "video" ? "📹 Video call…" : "📞 Voice call…",
+        mode == "screen" ? "🖥 Screen share…" : (mode == "video" ? "📹 Video call…" : "📞 Voice call…"),
         QString("Calling %1…\nWaiting for them to answer.").arg(peerName),
         {
             {"Cancel", [this, peerIp, cancelMsg]() mutable {
                 sendDirectSignal(peerIp, cancelMsg, false);
                 m_pendingCallMode.clear();
+                m_callingNotif = nullptr;
             }}
         },
         this
     );
+    connect(m_callingNotif, &QObject::destroyed, this, [this]() {
+        m_callingNotif = nullptr;
+    });
     m_callingNotif->show();
 }
 
@@ -922,7 +1036,10 @@ void MainWindow::handleGroupMsg(const SigMsg& msg)
 
         std::vector<uint8_t> data(full.begin(), full.end());
         std::string mime = tr.mime.toStdString();
-        MessageKind kind = Helpers::isImage(mime) ? MessageKind::Image : MessageKind::File;
+        const bool isVoice = mime.rfind("audio/", 0) == 0 ||
+                             tr.fileName.compare("voice_note.wav", Qt::CaseInsensitive) == 0;
+        MessageKind kind = isVoice ? MessageKind::VoiceNote
+                                   : (Helpers::isImage(mime) ? MessageKind::Image : MessageKind::File);
 
         ChatMessage cm;
         cm.kind      = kind;
@@ -934,15 +1051,18 @@ void MainWindow::handleGroupMsg(const SigMsg& msg)
         cm.data      = data;
         cm.timestamp = msg.ts;
 
+        const QString completedGroupId = tr.groupId;
+        const QString completedFromName = tr.fromName;
+        const QString completedFileName = tr.fileName;
         m_pendingTransfers.remove(tid);
 
-        QString key = "grp-" + tr.groupId;
+        QString key = "grp-" + completedGroupId;
         m_chatStore->append(key, cm);
-        if (m_activeGroup && m_activeGroup->groupId == tr.groupId.toStdString()) {
+        if (m_activeGroup && m_activeGroup->groupId == completedGroupId.toStdString()) {
             appendGroupMsg(cm, false);
             scrollGroupChatToBottom();
         } else {
-            showToast(QString("[Group] ") + tr.fromName, "📎 " + tr.fileName);
+            showToast(QString("[Group] ") + completedFromName, "📎 " + completedFileName);
         }
         return;
     }
@@ -1046,6 +1166,7 @@ void MainWindow::onChatSend()
 
     SigMsg sig = buildSig(SigType::ChatText);
     sig.text = text.toStdString();
+    sig.target_id = m_activeFriend->id;
     SignalingClient::send(QString::fromStdString(m_activeFriend->ip), sig);
 
     ChatMessage cm;
@@ -1066,8 +1187,11 @@ void MainWindow::onChatSendImage() { sendFile(false, true);  }
 void MainWindow::onVoiceNotePress()
 {
 #ifdef HAS_MULTIMEDIA
-    m_vnRec->start();
-    m_lblRecording->setVisible(true);
+    if (!m_activeFriend || !m_friendMgr->hasFriend(QString::fromStdString(m_activeFriend->id))) return;
+    if (m_vnRec && m_vnRec->start())
+        m_lblRecording->setVisible(true);
+    else
+        showToast("Microphone unavailable", "Could not start recording a voice note.");
 #endif
 }
 
@@ -1075,13 +1199,49 @@ void MainWindow::onVoiceNoteRelease()
 {
     m_lblRecording->setVisible(false);
 #ifdef HAS_MULTIMEDIA
+    if (!m_vnRec || !m_activeFriend || !m_vnRec->isRecording()) return;
     QByteArray wav = m_vnRec->stop();
-    if (wav.size() < 100 || !m_activeFriend) return;
+    if (wav.size() < 100) {
+        showToast("Voice note", "Hold the button a little longer to record.");
+        return;
+    }
 
     std::vector<uint8_t> wavVec(wav.begin(), wav.end());
-    SigMsg sig = buildSig(SigType::ChatVoice);
-    sig.data = Helpers::base64Encode(wavVec);
-    SignalingClient::send(QString::fromStdString(m_activeFriend->ip), sig);
+
+    // Voice notes must arrive in order and without flooding the signaling
+    // listener.  Older builds launched one background TCP task per chunk, which
+    // could overload the receiver and make the note appear to do nothing.  Build
+    // signed chunks on the UI thread, then send them sequentially on one worker.
+    const QString peerIp = QString::fromStdString(m_activeFriend->ip);
+    const QString transferId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const int chunkSize = 8 * 1024;
+    const int totalChunks = (wav.size() + chunkSize - 1) / chunkSize;
+    QVector<SigMsg> chunks;
+    chunks.reserve(totalChunks);
+    for (int i = 0; i < totalChunks; ++i) {
+        const int offset = i * chunkSize;
+        const int size = qMin(chunkSize, wav.size() - offset);
+        QByteArray chunk = wav.mid(offset, size);
+        std::vector<uint8_t> chunkVec(chunk.begin(), chunk.end());
+
+        SigMsg sig = buildSig(SigType::ChatVoice);
+        sig.file_name = "voice_note.wav";
+        sig.mime = "audio/wav";
+        sig.target_id = m_activeFriend->id;
+        sig.data = Helpers::base64Encode(chunkVec);
+        sig.transfer_id = transferId.toStdString();
+        sig.chunk_index = i;
+        sig.total_chunks = totalChunks;
+        sig.file_size = static_cast<int64_t>(wav.size());
+        signSignal(sig);
+        chunks.append(sig);
+    }
+    (void)QtConcurrent::run([peerIp, chunks]() {
+        for (const SigMsg& sig : chunks) {
+            (void)SignalingClient::sendReliableBlocking(peerIp, sig, 4, 120);
+            QThread::msleep(15);
+        }
+    });
 
     ChatMessage cm;
     cm.kind     = MessageKind::VoiceNote;
@@ -1139,8 +1299,11 @@ void MainWindow::onGroupSendImage() { sendFile(true, true);  }
 void MainWindow::onGroupVoiceNotePress()
 {
 #ifdef HAS_MULTIMEDIA
-    m_vnRecGroup->start();
-    m_lblGrpRecording->setVisible(true);
+    if (!m_activeGroup) return;
+    if (m_vnRecGroup && m_vnRecGroup->start())
+        m_lblGrpRecording->setVisible(true);
+    else
+        showToast("Microphone unavailable", "Could not start recording a voice note.");
 #endif
 }
 
@@ -1148,14 +1311,53 @@ void MainWindow::onGroupVoiceNoteRelease()
 {
     m_lblGrpRecording->setVisible(false);
 #ifdef HAS_MULTIMEDIA
+    if (!m_vnRecGroup || !m_activeGroup || !m_vnRecGroup->isRecording()) return;
     QByteArray wav = m_vnRecGroup->stop();
-    if (wav.size() < 100 || !m_activeGroup) return;
+    if (wav.size() < 100) {
+        showToast("Voice note", "Hold the button a little longer to record.");
+        return;
+    }
 
     std::vector<uint8_t> wavVec(wav.begin(), wav.end());
-    SigMsg sig = buildSig(SigType::GrpVoice);
-    sig.data     = Helpers::base64Encode(wavVec);
-    sig.group_id = m_activeGroup->groupId;
-    broadcastToGroup(m_activeGroup, sig);
+
+    // Group voice notes are also sent sequentially to avoid flooding every
+    // recipient with concurrent TCP connections.
+    const QString transferId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const int chunkSize = 8 * 1024;
+    const int totalChunks = (wav.size() + chunkSize - 1) / chunkSize;
+    QVector<SigMsg> chunks;
+    chunks.reserve(totalChunks);
+    for (int i = 0; i < totalChunks; ++i) {
+        const int offset = i * chunkSize;
+        const int size = qMin(chunkSize, wav.size() - offset);
+        QByteArray chunk = wav.mid(offset, size);
+        std::vector<uint8_t> chunkVec(chunk.begin(), chunk.end());
+
+        SigMsg sig = buildSig(SigType::GrpVoice);
+        sig.file_name = "voice_note.wav";
+        sig.mime      = "audio/wav";
+        sig.data      = Helpers::base64Encode(chunkVec);
+        sig.group_id  = m_activeGroup->groupId;
+        sig.transfer_id = transferId.toStdString();
+        sig.chunk_index = i;
+        sig.total_chunks = totalChunks;
+        sig.file_size = static_cast<int64_t>(wav.size());
+        signSignal(sig);
+        chunks.append(sig);
+    }
+    QStringList targets;
+    for (const auto& mid : m_activeGroup->memberIds) {
+        FriendInfo* f = m_friendMgr->getFriend(QString::fromStdString(mid));
+        if (f && !f->ip.empty()) targets << QString::fromStdString(f->ip);
+    }
+    (void)QtConcurrent::run([targets, chunks]() {
+        for (const QString& ip : targets) {
+            for (const SigMsg& sig : chunks) {
+                (void)SignalingClient::sendReliableBlocking(ip, sig, 4, 120);
+                QThread::msleep(15);
+            }
+        }
+    });
 
     ChatMessage cm;
     cm.kind     = MessageKind::VoiceNote;
@@ -1350,7 +1552,8 @@ void MainWindow::sendFile(bool isGroup, bool imagesOnly)
         // Send UploadStart so receiver sees "uploading" indicator
         SigMsg startSig = buildSig(SigType::UploadStart);
         startSig.file_name = cm.fileName;
-        SignalingClient::send(peerIp, startSig);
+        startSig.target_id = m_activeFriend->id;
+        sendDirectSignal(peerIp, startSig, false);
 
         // Show local upload progress bar
         if (m_chatUploadBar) {
@@ -1360,6 +1563,7 @@ void MainWindow::sendFile(bool isGroup, bool imagesOnly)
 
         sendChunked([&](SigMsg sig){
             sig.type = SigType::ChatFile;
+            sig.target_id = m_activeFriend->id;
             sendDirectSignal(peerIp, sig, true);
             // Update progress bar
             if (m_chatUploadBar && totalChunks > 0) {
@@ -1373,7 +1577,8 @@ void MainWindow::sendFile(bool isGroup, bool imagesOnly)
 
         // Send UploadEnd
         SigMsg endSig = buildSig(SigType::UploadEnd);
-        SignalingClient::send(peerIp, endSig);
+        endSig.target_id = m_activeFriend->id;
+        sendDirectSignal(peerIp, endSig, false);
 
         m_chatStore->append(m_chatConvKey, cm);
         appendChatMsg(cm, true);
@@ -1692,6 +1897,82 @@ void MainWindow::onEditProfile()
     m_lblMyName->setText(m_myName + "  ·  " + m_localIp);
 }
 
+
+namespace {
+QString sidebarInitials(const QString& name)
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) return "?";
+
+    QStringList parts = trimmed.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+    QString initials;
+    for (const QString& part : parts) {
+        if (!part.isEmpty()) initials += part.left(1).toUpper();
+        if (initials.size() >= 2) break;
+    }
+    return initials.isEmpty() ? trimmed.left(1).toUpper() : initials;
+}
+
+QWidget* makeConversationListRow(const QString& title,
+                                 const QString& subtitle,
+                                 const QString& avatarText,
+                                 bool online,
+                                 int unread,
+                                 bool locked,
+                                 QWidget* parent)
+{
+    auto* row = new QWidget(parent);
+    row->setAttribute(Qt::WA_StyledBackground, true);
+    row->setStyleSheet("background:transparent;");
+
+    auto* layout = new QHBoxLayout(row);
+    layout->setContentsMargins(10, 7, 10, 7);
+    layout->setSpacing(10);
+
+    auto* avatar = new QLabel(avatarText, row);
+    avatar->setFixedSize(38, 38);
+    avatar->setAlignment(Qt::AlignCenter);
+    avatar->setStyleSheet(QString(
+        "background:%1;color:%2;border-radius:19px;font-size:13px;font-weight:700;")
+        .arg(locked ? "#20202E" : (online ? "#CBA6F7" : "#313244"))
+        .arg(locked ? "#6C7086" : (online ? "#11111B" : "#CDD6F4")));
+    layout->addWidget(avatar);
+
+    auto* textCol = new QVBoxLayout();
+    textCol->setContentsMargins(0, 0, 0, 0);
+    textCol->setSpacing(2);
+
+    auto* lblTitle = new QLabel(title, row);
+    lblTitle->setStyleSheet(QString("color:%1;font-size:13px;font-weight:600;")
+                                .arg(locked ? "#6C7086" : "#CDD6F4"));
+    lblTitle->setTextFormat(Qt::PlainText);
+    lblTitle->setWordWrap(false);
+
+    auto* lblSub = new QLabel(subtitle, row);
+    lblSub->setStyleSheet(QString("color:%1;font-size:10px;")
+                              .arg(online ? "#A6E3A1" : "#6C7086"));
+    lblSub->setTextFormat(Qt::PlainText);
+    lblSub->setWordWrap(false);
+
+    textCol->addWidget(lblTitle);
+    textCol->addWidget(lblSub);
+    layout->addLayout(textCol, 1);
+
+    if (unread > 0) {
+        auto* badge = new QLabel(QString::number(unread), row);
+        badge->setAlignment(Qt::AlignCenter);
+        badge->setMinimumWidth(22);
+        badge->setFixedHeight(22);
+        badge->setStyleSheet(
+            "background:#CBA6F7;color:#11111B;border-radius:11px;"
+            "font-size:10px;font-weight:700;padding:0 6px;");
+        layout->addWidget(badge);
+    }
+
+    return row;
+}
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  REBUILD HELPERS
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1699,20 +1980,38 @@ void MainWindow::onEditProfile()
 void MainWindow::rebuildFriendsList()
 {
     m_friendsList->clear();
+
     // Active friends
     for (auto& f : m_friendMgr->friends()) {
-        QString badge = f.unreadCount > 0 ? QString(" (%1)").arg(f.unreadCount) : "";
-        QString dot   = f.isOnline ? "🟢" : "⚫";
-        auto* item = new QListWidgetItem(dot + "  " + QString::fromStdString(f.name) + badge);
-        item->setData(Qt::UserRole, QString::fromStdString(f.id));
-        m_friendsList->addItem(item);
+        const QString id = QString::fromStdString(f.id);
+        const QString name = QString::fromStdString(f.name);
+        const QString subtitle = f.isOnline
+            ? QString("Online · %1").arg(QString::fromStdString(f.ip))
+            : QString("Offline");
+
+        auto* item = new QListWidgetItem(m_friendsList);
+        item->setData(Qt::UserRole, id);
+        item->setSizeHint(QSize(0, 56));
+
+        m_friendsList->setItemWidget(
+            item,
+            makeConversationListRow(name, subtitle, sidebarInitials(name),
+                                    f.isOnline, f.unreadCount, false, m_friendsList));
     }
-    // Former (greyed)
+
+    // Former friends stay visible as locked read-only conversations.
     for (auto& f : m_friendMgr->formerFriends()) {
-        auto* item = new QListWidgetItem("🔒  " + QString::fromStdString(f.name));
-        item->setData(Qt::UserRole, QString::fromStdString(f.id));
-        item->setForeground(QColor("#45475A"));
-        m_friendsList->addItem(item);
+        const QString id = QString::fromStdString(f.id);
+        const QString name = QString::fromStdString(f.name);
+
+        auto* item = new QListWidgetItem(m_friendsList);
+        item->setData(Qt::UserRole, id);
+        item->setSizeHint(QSize(0, 56));
+
+        m_friendsList->setItemWidget(
+            item,
+            makeConversationListRow(name, "Removed contact", "🔒",
+                                    false, 0, true, m_friendsList));
     }
 }
 
@@ -1720,9 +2019,19 @@ void MainWindow::rebuildGroupsList()
 {
     m_groupsList->clear();
     for (auto& g : m_friendMgr->groups()) {
-        auto* item = new QListWidgetItem("👥  " + QString::fromStdString(g.name));
-        item->setData(Qt::UserRole, QString::fromStdString(g.groupId));
-        m_groupsList->addItem(item);
+        const QString id = QString::fromStdString(g.groupId);
+        const QString name = QString::fromStdString(g.name);
+        const int members = static_cast<int>(g.memberIds.size());
+        const QString subtitle = QString("%1 member%2").arg(members).arg(members == 1 ? "" : "s");
+
+        auto* item = new QListWidgetItem(m_groupsList);
+        item->setData(Qt::UserRole, id);
+        item->setSizeHint(QSize(0, 56));
+
+        m_groupsList->setItemWidget(
+            item,
+            makeConversationListRow(name, subtitle, "👥",
+                                    false, 0, false, m_groupsList));
     }
 }
 
@@ -1832,13 +2141,13 @@ void MainWindow::syncGroupMembers(GroupInfo* single)
 static int calculateRequiredBubbleWidth(const QString& text, int maxW)
 {
     constexpr int kPadding = 24;        // 12px left + 12px right
-    constexpr int kMinBubbleW = 80;    // Minimum bubble width
+    constexpr int kMinBubbleW = 132;   // Minimum bubble width
     
     if (text.isEmpty())
         return kMinBubbleW;
     
     // Use QFontMetrics to measure text width
-    QFont f; f.setPixelSize(13);
+    QFont f; f.setPixelSize(14);
     QFontMetrics fm(f);
     
     // Split by newlines and find the longest line
@@ -1870,7 +2179,7 @@ static QWidget* buildBubble(const ChatMessage& cm, bool isMine,
 
     auto* bubble = new QWidget(outer);
     bubble->setObjectName(isMine ? "bubbleMine" : "bubbleTheirs");
-    bubble->setMinimumWidth(80);
+    bubble->setMinimumWidth(132);
     // Fix the bubble to exactly the width the caller computed.
     // This is what allows QLabel's heightForWidth() to be right.
     bubble->setFixedWidth(bubbleMaxW);
@@ -1900,29 +2209,21 @@ static QWidget* buildBubble(const ChatMessage& cm, bool isMine,
             : fullText;
 
         // Inner text width = bubble width minus horizontal padding
-        const int textW = bubbleMaxW - 24;   // 12 px padding on each side
+        const int textW = qMax(96, bubbleMaxW - 24);   // 12 px padding on each side
 
-        auto* txtEdit = new QTextEdit(bubble);
-        txtEdit->setObjectName("msgText");
-        txtEdit->setPlainText(isLong ? shortText : fullText);
-        txtEdit->setStyleSheet(
-            "QTextEdit#msgText { "
-            "color:#CDD6F4; font-size:13px; background:transparent; border:none; "
+        auto* txtLbl = new QLabel(isLong ? shortText : fullText, bubble);
+        txtLbl->setObjectName("msgText");
+        txtLbl->setTextFormat(Qt::PlainText);
+        txtLbl->setWordWrap(true);
+        txtLbl->setStyleSheet(
+            "QLabel#msgText { "
+            "color:#F4F4FB; font-size:14px; background:transparent; border:none; "
             "padding:0; margin:0; "
             "}");
-        txtEdit->setReadOnly(true);
-        txtEdit->setFocusPolicy(Qt::NoFocus);  // No focus rectangle
-        txtEdit->setWordWrapMode(QTextOption::WordWrap);
-        txtEdit->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        txtEdit->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        txtEdit->setFixedWidth(textW);
-        // Enable text selection and links
-        txtEdit->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::LinksAccessibleByMouse);
-        // Calculate height based on content
-        int contentHeight = (int)txtEdit->document()->size().height();
-        txtEdit->setFixedHeight(qMax(24, contentHeight));
-        txtEdit->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-        bLayout->addWidget(txtEdit);
+        txtLbl->setFixedWidth(textW);
+        txtLbl->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::LinksAccessibleByMouse);
+        txtLbl->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+        bLayout->addWidget(txtLbl);
 
         if (isLong) {
             auto* toggleBtn = new QPushButton("▼  Show more", bubble);
@@ -1935,25 +2236,16 @@ static QWidget* buildBubble(const ChatMessage& cm, bool isMine,
             toggleBtn->setProperty("expanded", false);
 
             QObject::connect(toggleBtn, &QPushButton::clicked,
-                [txtEdit, toggleBtn, fullText, shortText, outer, parentList, kMaxExpandedHeight]() {
+                [txtLbl, toggleBtn, fullText, shortText, outer, parentList, kMaxExpandedHeight]() {
 
                 bool expanded = toggleBtn->property("expanded").toBool();
                 expanded = !expanded;
                 toggleBtn->setProperty("expanded", expanded);
-                txtEdit->setPlainText(expanded ? fullText : shortText);
+                txtLbl->setText(expanded ? fullText : shortText);
                 toggleBtn->setText(expanded ? "▲  Show less" : "▼  Show more");
 
-                // When expanded: enable scrolling and set max height
-                // When collapsed: disable scrolling and auto-fit height
-                if (expanded) {
-                    txtEdit->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-                    int fullHeight = (int)txtEdit->document()->size().height();
-                    txtEdit->setFixedHeight(qMin(fullHeight, kMaxExpandedHeight));
-                } else {
-                    txtEdit->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-                    int collapsedHeight = (int)txtEdit->document()->size().height();
-                    txtEdit->setFixedHeight(qMax(24, collapsedHeight));
-                }
+                Q_UNUSED(kMaxExpandedHeight);
+                txtLbl->adjustSize();
 
                 // Recalculate bubble size and update list item
                 outer->adjustSize();
@@ -2021,7 +2313,7 @@ static QWidget* buildBubble(const ChatMessage& cm, bool isMine,
             file_fallback:
             auto* lbl = new QLabel("🖼 " + QString::fromStdString(cm.fileName), bubble);
             lbl->setObjectName("msgText");
-            lbl->setStyleSheet("color:#CDD6F4; font-size:13px; background:transparent;");
+            lbl->setStyleSheet("color:#F4F4FB; font-size:14px; background:transparent;");
             lbl->setWordWrap(true);
             bLayout->addWidget(lbl);
         }
@@ -2100,11 +2392,29 @@ static QWidget* buildBubble(const ChatMessage& cm, bool isMine,
             "QPushButton:hover{background:#B4BEFE;}");
         std::vector<uint8_t> wavData = cm.data;
         QObject::connect(playBtn, &QPushButton::clicked, [wavData]() {
-            QString tmp = QDir::temp().filePath("lcp_voice.wav");
+            if (wavData.empty()) return;
+            QString tmp = QDir::temp().filePath(
+                "localcall_voice_" + QString::number(QDateTime::currentMSecsSinceEpoch()) + ".wav");
             QFile out(tmp);
-            if (out.open(QIODevice::WriteOnly))
-                out.write(reinterpret_cast<const char*>(wavData.data()), (qint64)wavData.size());
-            QProcess::startDetached("wmplayer", {tmp});
+            if (!out.open(QIODevice::WriteOnly)) return;
+            out.write(reinterpret_cast<const char*>(wavData.data()), (qint64)wavData.size());
+            out.close();
+#ifdef HAS_MULTIMEDIA
+            auto* player = new QMediaPlayer;
+            auto* audioOut = new QAudioOutput(player);
+            player->setAudioOutput(audioOut);
+            player->setSource(QUrl::fromLocalFile(tmp));
+            QObject::connect(player, &QMediaPlayer::mediaStatusChanged, player, [player](QMediaPlayer::MediaStatus st) {
+                if (st == QMediaPlayer::EndOfMedia || st == QMediaPlayer::InvalidMedia)
+                    player->deleteLater();
+            });
+            QObject::connect(player, &QMediaPlayer::errorOccurred, player, [player](QMediaPlayer::Error, const QString&) {
+                player->deleteLater();
+            });
+            player->play();
+#else
+            QDesktopServices::openUrl(QUrl::fromLocalFile(tmp));
+#endif
         });
         vnLayout->addWidget(micLbl);
         vnLayout->addWidget(textLbl, 1);
@@ -2148,14 +2458,13 @@ static int measureBubbleHeight(const ChatMessage& cm, int bubbleMaxW)
         if (isLong)
             text = text.left(300).trimmed() + "…";
         
-        // Create temporary QTextEdit to measure accurate wrapped text height
-        QTextEdit tempEdit;
-        tempEdit.setPlainText(text);
-        tempEdit.setWordWrapMode(QTextOption::WordWrap);
-        tempEdit.setFixedWidth(innerW);
-        tempEdit.document()->setUndoRedoEnabled(false);
-        contentH = (int)tempEdit.document()->size().height();
-        contentH = qMax(24, contentH);  // minimum height
+        QFont f;
+        f.setPixelSize(14);
+        QFontMetrics fm(f);
+        const QRect bounds = fm.boundingRect(QRect(0, 0, innerW, 20000),
+                                             Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop,
+                                             text);
+        contentH = qMax(28, bounds.height() + 6);  // minimum height
         
         if (isLong) contentH += 20;  // "Show more" button row
     } else if (cm.kind == MessageKind::Image) {
@@ -2177,7 +2486,7 @@ void MainWindow::appendChatMsg(const ChatMessage& cm, bool isMine)
     const int viewW    = m_chatMsgList->viewport()->width();
     const int outerW   = viewW - 4;
     // Bubble is capped at 520; calculate actual width needed for content
-    const int maxBubbleW = qMin(outerW - 32, 520);
+    const int maxBubbleW = qMin(qMax(160, (outerW * 68) / 100), 560);
     
     int bubbleW = maxBubbleW;
     if (cm.kind == MessageKind::Text) {
@@ -2204,7 +2513,7 @@ void MainWindow::appendGroupMsg(const ChatMessage& cm, bool isMine)
 
     const int viewW   = m_groupMsgList->viewport()->width();
     const int outerW  = viewW - 4;
-    const int maxBubbleW = qMin(outerW - 32, 520);
+    const int maxBubbleW = qMin(qMax(160, (outerW * 68) / 100), 560);
     
     int bubbleW = maxBubbleW;
     if (cm.kind == MessageKind::Text) {
@@ -2243,10 +2552,11 @@ void MainWindow::scrollGroupChatToBottom()
 
 void MainWindow::broadcastToGroup(GroupInfo* g, const SigMsg& sig)
 {
+    const bool reliable = sig.transfer_id.has_value();
     for (const auto& mid : g->memberIds) {
         FriendInfo* f = m_friendMgr->getFriend(QString::fromStdString(mid));
         if (f && !f->ip.empty())
-            SignalingClient::send(QString::fromStdString(f->ip), sig);
+            sendDirectSignal(QString::fromStdString(f->ip), sig, reliable);
     }
 }
 
@@ -2269,8 +2579,10 @@ ChatMessage MainWindow::sigToMessage(const SigMsg& sig, bool isMine) const
     cm.fromId   = sig.from_id;
     cm.fromName = sig.from_name;
     cm.text     = sig.text.value_or("");
-    cm.fileName = sig.file_name.value_or("");
-    cm.mime     = sig.mime.value_or("");
+    cm.fileName = sig.file_name.value_or(
+        (cm.kind == MessageKind::VoiceNote) ? "voice_note.wav" : "");
+    cm.mime     = sig.mime.value_or(
+        (cm.kind == MessageKind::VoiceNote) ? "audio/wav" : "");
     cm.isMine   = isMine;
     cm.timestamp = sig.ts;
     if (sig.data) cm.data = Helpers::base64Decode(*sig.data);

@@ -16,6 +16,43 @@ function Resolve-FullPath([string]$Path) {
     return [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $Path))
 }
 
+function Test-NoDebugRuntimeImports {
+    param([Parameter(Mandatory=$true)][string]$Directory)
+
+    $debugRuntimeNames = @(
+        'VCRUNTIME140D.dll',
+        'VCRUNTIME140_1D.dll',
+        'MSVCP140D.dll',
+        'ucrtbased.dll'
+    )
+
+    $bad = @()
+    Get-ChildItem -Path $Directory -File -Include *.exe,*.dll -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+        $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+        foreach ($runtime in $debugRuntimeNames) {
+            if ($text.IndexOf($runtime, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                $bad += "$($_.FullName) imports $runtime"
+            }
+        }
+    }
+
+    if ($bad.Count -gt 0) {
+        throw @"
+This runtime folder contains Debug MSVC runtime imports and must not be used in an installer.
+
+$($bad -join "`n")
+
+Build a clean Release distribution instead:
+  build.bat clean release
+
+Then package this folder only:
+  dist\LocalCall
+"@
+    }
+    Write-Host "OK: no Debug MSVC runtime imports were found"
+}
+
 $QtDir = Resolve-FullPath $QtDir
 $qtBin = Join-Path $QtDir "bin"
 if (-not (Test-Path $qtBin)) { throw "Qt bin folder not found: $qtBin" }
@@ -40,7 +77,7 @@ Write-Host "Expected Qt kit       : $QtDir"
 # before our repair/verification code gets control.
 $launcherText = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($launcher))
 if ($launcherText.Contains("Qt6Widgets") -or $launcherText.Contains("Qt6Core")) {
-    throw "LocalCall.exe still imports Qt. Delete build/dist and rebuild v2.0.13. The launcher must be native-only."
+    throw "LocalCall.exe still imports Qt. Delete build/dist and rebuild v2.0.14. The launcher must be native-only."
 }
 Write-Host "OK: LocalCall.exe is native launcher and has no Qt imports"
 
@@ -69,4 +106,7 @@ Write-Host "OK: qwindows.dll matches selected Qt kit"
 $prefixFile = Join-Path $outDir "localcall-qt-prefix.txt"
 if (-not (Test-Path $prefixFile)) { throw "Missing localcall-qt-prefix.txt. Redeploy with scripts\deploy-windows.ps1 -Clean." }
 Write-Host "OK: localcall-qt-prefix.txt exists"
+
+Test-NoDebugRuntimeImports -Directory $outDir
+
 Write-Host "Runtime check passed. Launch LocalCall.exe, not LocalCallApp.exe."

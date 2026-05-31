@@ -3,7 +3,7 @@
 Local Call Pro — Secure RTC Python Edition
 
 WebRTC-first, low-latency local/internet calling app.
-- WebRTC/aiortc DataChannel media path compatible with Local Call C++ v2.0.14+.
+- WebRTC/aiortc DataChannel media path compatible with Local Call C++ v2.0.15+.
 - Ed25519 signed signaling using PyNaCl.
 - LAN peer discovery and TCP signaling compatible with the Local Call v1 JSON envelope.
 - Optional WebSocket signaling server for internet calling.
@@ -648,7 +648,7 @@ class WebSocketSignalingClient(QThread):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# WebRTC DataChannel media worker compatible with C++ Local Call v2.0.14+
+# WebRTC DataChannel media worker compatible with C++ Local Call v2.0.15+
 # ─────────────────────────────────────────────────────────────────────────────
 
 

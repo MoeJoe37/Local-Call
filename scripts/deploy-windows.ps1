@@ -30,6 +30,41 @@ function Remove-IfExists([string]$Path) {
     if (Test-Path $Path) { Remove-Item -Recurse -Force $Path }
 }
 
+function Test-NoDebugRuntimeImports {
+    param([Parameter(Mandatory=$true)][string]$Directory)
+
+    if ($Config -match '^[Dd]ebug$') { return }
+
+    $debugRuntimeNames = @(
+        'VCRUNTIME140D.dll',
+        'VCRUNTIME140_1D.dll',
+        'MSVCP140D.dll',
+        'ucrtbased.dll'
+    )
+
+    $bad = @()
+    Get-ChildItem -Path $Directory -File -Include *.exe,*.dll -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+        $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+        foreach ($runtime in $debugRuntimeNames) {
+            if ($text.IndexOf($runtime, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                $bad += "$($_.FullName) imports $runtime"
+            }
+        }
+    }
+
+    if ($bad.Count -gt 0) {
+        throw @"
+Release deployment contains Debug MSVC runtime imports. Do not distribute this folder.
+This usually means Debug vcpkg DLLs were copied into a Release package.
+
+$($bad -join "`n")
+
+Fix: delete build and dist, then run: build.bat clean release
+"@
+    }
+}
+
 $buildPath = Resolve-FullPath $BuildDir
 $buildOutDir = Join-Path $buildPath $Config
 if (-not (Test-Path $buildOutDir)) { $buildOutDir = $buildPath }
@@ -98,10 +133,10 @@ Write-Host "Qt install prefix  : $(& $qmake -query QT_INSTALL_PREFIX)"
 
 if ($Clean) {
     Write-Host "Cleaning stale runtime files from: $outDir"
-    Get-ChildItem -Path $outDir -Filter "Qt6*.dll" -ErrorAction SilentlyContinue | Remove-Item -Force
-    Get-ChildItem -Path $outDir -Filter "Qt6*.pdb" -ErrorAction SilentlyContinue | Remove-Item -Force
-    Get-ChildItem -Path $outDir -Filter "*Qt6*.dll" -ErrorAction SilentlyContinue | Remove-Item -Force
-    Get-ChildItem -Path $outDir -Filter "q*.dll" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "^(qwindows|qgif|qico|qjpeg|qsvg|qwebp|qmodern|qwindowsvistastyle)" } | Remove-Item -Force
+    # This folder is a deployment folder, so it must not keep DLLs from a
+    # previous Debug or different Qt/vcpkg build. Re-deploy everything cleanly.
+    Get-ChildItem -Path $outDir -Filter "*.dll" -ErrorAction SilentlyContinue | Remove-Item -Force
+    Get-ChildItem -Path $outDir -Filter "*.pdb" -ErrorAction SilentlyContinue | Remove-Item -Force
     Remove-IfExists (Join-Path $outDir "qt.conf")
     foreach ($dir in @(
         "platforms", "styles", "imageformats", "iconengines", "generic",
@@ -125,15 +160,22 @@ try {
 }
 finally { $env:PATH = $oldPath }
 
-# Copy vcpkg runtime DLLs to build/Release or dist.
-foreach ($vcpkgBin in @(
-    (Join-Path $buildPath "vcpkg_installed/x64-windows/bin"),
-    (Join-Path $buildPath "vcpkg_installed/x64-windows/debug/bin")
-)) {
-    if (Test-Path $vcpkgBin) {
-        Get-ChildItem -Path $vcpkgBin -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-            Copy-Item -Force $_.FullName (Join-Path $outDir $_.Name)
-        }
+# Copy vcpkg runtime DLLs that match the selected build configuration.
+#
+# IMPORTANT: never copy x64-windows/debug/bin into a Release deployment.
+# Debug vcpkg DLLs import VCRUNTIME140D.dll, VCRUNTIME140_1D.dll,
+# MSVCP140D.dll and ucrtbased.dll. Those files exist on the developer PC
+# because Visual Studio is installed, but they are not redistributable and will
+# fail on a clean Windows 11 PC.
+$vcpkgRuntimeBin = if ($Config -match '^[Dd]ebug$') {
+    Join-Path $buildPath "vcpkg_installed/x64-windows/debug/bin"
+} else {
+    Join-Path $buildPath "vcpkg_installed/x64-windows/bin"
+}
+if (Test-Path $vcpkgRuntimeBin) {
+    Write-Host "Copying vcpkg runtime DLLs from: $vcpkgRuntimeBin"
+    Get-ChildItem -Path $vcpkgRuntimeBin -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+        Copy-Item -Force $_.FullName (Join-Path $outDir $_.Name)
     }
 }
 
@@ -188,6 +230,8 @@ Plugins=.
 Imports=.
 Qml2Imports=.
 "@ | Set-Content -Path (Join-Path $outDir "qt.conf") -Encoding ASCII
+
+Test-NoDebugRuntimeImports -Directory $outDir
 
 Write-Host "Deployment finished and Qt DLLs were verified against the selected Qt kit."
 Write-Host "Run the launcher, not LocalCallApp.exe:"
