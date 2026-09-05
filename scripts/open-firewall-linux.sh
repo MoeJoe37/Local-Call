@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Opens the LAN ports used by Local Call. Run only on trusted private networks.
-TCP_PORTS=(50010)
-UDP_PORTS=(50005 50100 50105 50200)
+TCP_PORTS=(50010 50120)
+UDP_PORTS=(50005 50100 50200)
 
 if command -v firewall-cmd >/dev/null 2>&1; then
   for p in "${TCP_PORTS[@]}"; do sudo firewall-cmd --permanent --add-port="${p}/tcp"; done

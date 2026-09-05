@@ -1,12 +1,11 @@
 param(
     [string]$QtDir = "",
     [string]$VcpkgRoot = "",
-    [string]$BuildDir = "build",
+    [string]$BuildDir = "",
     [ValidateSet("Debug", "Release", "RelWithDebInfo", "MinSizeRel")]
     [string]$Config = "Release",
     [switch]$Clean,
-    [string]$WebRTC = "ON",
-    [string]$OpenCV = "AUTO",
+    [string]$WebRTC = "AUTO",
     [string]$Multimedia = "ON",
     [string]$DistDir = "dist/LocalCall",
     [switch]$NoDist
@@ -57,6 +56,12 @@ function Get-QtKitScore {
     }
 
     return $score
+}
+
+function Get-QtKitToolchain {
+    param([Parameter(Mandatory=$true)][string]$Path)
+    if ($Path -match "mingw|gcc_64") { return "mingw" }
+    return "msvc"
 }
 
 function Find-QtDir {
@@ -167,20 +172,69 @@ function Enter-MSVCEnvironment {
     }
 }
 
+function Enter-MinGWEnvironment {
+    param([Parameter(Mandatory=$true)][string]$QtKitDir)
+
+    # Qt installs its own MinGW toolchain next to the kits:
+    #   C:\Qt\6.11.1\mingw_64  ->  C:\Qt\Tools\mingw1310_64\bin
+    $qtRoot = Split-Path -Parent (Split-Path -Parent $QtKitDir)
+    $toolsRoot = Join-Path $qtRoot "Tools"
+
+    $mingwBins = @()
+    if (Test-Path -LiteralPath $toolsRoot) {
+        $mingwBins = @(Get-ChildItem -LiteralPath $toolsRoot -Directory -Filter "mingw*" -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName "bin" } |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_ "g++.exe") })
+    }
+
+    if ($mingwBins.Count -eq 0) {
+        throw "No MinGW toolchain was found for $QtKitDir. Install 'MinGW 64-bit' with the Qt Maintenance Tool (Qt / Developer and Designer Tools)."
+    }
+
+    # Prepend so Qt's toolchain wins over any other gcc in PATH (MSYS2, Cygwin, ...).
+    $env:PATH = "$($mingwBins[0]);$($env:PATH)"
+    return $mingwBins[0]
+}
+
+function Find-NinjaExecutable {
+    param([Parameter(Mandatory=$true)][string]$QtKitDir)
+
+    $qtRoot = Split-Path -Parent (Split-Path -Parent $QtKitDir)
+    foreach ($candidate in @(
+        (Join-Path $qtRoot "Tools/Ninja/ninja.exe"),
+        (Join-Path $qtRoot "Tools/CMake_64/bin/ninja.exe")
+    )) {
+        if (Test-Path -LiteralPath $candidate) { return (Resolve-Path -LiteralPath $candidate).Path }
+    }
+
+    $ninjaCmd = Get-Command ninja -ErrorAction SilentlyContinue
+    if ($ninjaCmd) { return $ninjaCmd.Source }
+
+    throw "Ninja was not found. Install 'Ninja' with the Qt Maintenance Tool or add ninja.exe to PATH."
+}
+
 Set-Location -LiteralPath (Split-Path -Parent $PSScriptRoot)
 
 $resolvedQtDir = Find-QtDir $QtDir
 if (-not $resolvedQtDir) {
     throw @"
 Qt6Config.cmake was not found.
-Install Qt 6 for MSVC 2022 64-bit from the Qt Maintenance Tool, then run build.bat again.
+Install Qt 6 (MSVC 2022 64-bit or MinGW 64-bit) from the Qt Maintenance Tool, then run build.bat again.
 Expected example path: C:\Qt\6.x.x\msvc2022_64\lib\cmake\Qt6\Qt6Config.cmake
 You can also run: .\build.bat -QtDir C:\Qt\6.x.x\msvc2022_64
 "@
 }
 
-if ($resolvedQtDir -match "mingw|gcc_64") {
-    throw "The detected Qt kit is not compatible with the Visual Studio generator: $resolvedQtDir. Install/use a Qt MSVC 2022 64-bit kit."
+# Both Qt kit flavours are supported. The kit decides the generator, the
+# compiler and the vcpkg triplet, because an MSVC build cannot link MinGW Qt
+# DLLs and vice versa.
+$kitToolchain = Get-QtKitToolchain $resolvedQtDir
+
+if ([string]::IsNullOrWhiteSpace($BuildDir)) {
+    # Keep both flavours in separate trees: their CMake caches, vcpkg triplets
+    # and generators are not interchangeable.
+    $BuildDir = if ($kitToolchain -eq "mingw") { "build-mingw" } else { "build" }
 }
 
 $resolvedVcpkgRoot = Find-VcpkgRoot $VcpkgRoot
@@ -195,39 +249,75 @@ if ($Clean -and (Test-Path -LiteralPath $BuildDir)) {
     Remove-Item -Recurse -Force $BuildDir
 }
 
-Enter-MSVCEnvironment
+$ninja = ""
+if ($kitToolchain -eq "mingw") {
+    $mingwBin = Enter-MinGWEnvironment $resolvedQtDir
+    $ninja = Find-NinjaExecutable $resolvedQtDir
+    $vcpkgTriplet = "x64-mingw-dynamic"
+    if ($WebRTC -eq "AUTO") {
+        # vcpkg's libdatachannel (usrsctp) does not build with MinGW, and LAN
+        # calls do not need it, so the optional transport stays off here.
+        $WebRTC = "OFF"
+    }
+    Write-Host "Using MinGW: $mingwBin"
+    Write-Host "Using Ninja: $ninja"
+} else {
+    Enter-MSVCEnvironment
+    $vcpkgTriplet = "x64-windows"
+}
 
 Write-Host "Using Qt:    $resolvedQtDir"
 Write-Host "Using vcpkg: $resolvedVcpkgRoot"
+Write-Host "Triplet:     $vcpkgTriplet"
 Write-Host "Config:      $Config"
 
-cmake -S . -B $BuildDir `
-    -G "Visual Studio 17 2022" -A x64 `
-    -DCMAKE_TOOLCHAIN_FILE="$toolchain" `
-    -DCMAKE_PREFIX_PATH="$resolvedQtDir" `
-    -DLOCALCALL_WITH_WEBRTC="$WebRTC" `
-    -DLOCALCALL_WITH_OPENCV="$OpenCV" `
-    -DLOCALCALL_WITH_MULTIMEDIA="$Multimedia" `
-    -DLOCALCALL_POST_BUILD_DEPLOY_QT=ON `
-    -DLOCALCALL_INSTALL_QT_RUNTIME=ON
+$cmakeArgs = @(
+    "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
+    "-DCMAKE_PREFIX_PATH=$resolvedQtDir",
+    "-DVCPKG_TARGET_TRIPLET=$vcpkgTriplet",
+    "-DVCPKG_HOST_TRIPLET=x64-windows",
+    "-DLOCALCALL_WITH_WEBRTC=$WebRTC",
+    "-DLOCALCALL_WITH_MULTIMEDIA=$Multimedia",
+    "-DLOCALCALL_POST_BUILD_DEPLOY_QT=ON",
+    "-DLOCALCALL_INSTALL_QT_RUNTIME=ON"
+)
+
+# libdatachannel is a vcpkg manifest feature, so it is only installed when the
+# optional WebRTC transport is actually wanted.
+if ($WebRTC -ne "OFF") { $cmakeArgs += "-DVCPKG_MANIFEST_FEATURES=webrtc" }
+
+if ($kitToolchain -eq "mingw") {
+    cmake -S . -B $BuildDir -G "Ninja" `
+        "-DCMAKE_MAKE_PROGRAM=$ninja" `
+        -DCMAKE_C_COMPILER=gcc `
+        -DCMAKE_CXX_COMPILER=g++ `
+        "-DCMAKE_BUILD_TYPE=$Config" `
+        @cmakeArgs
+} else {
+    cmake -S . -B $BuildDir -G "Visual Studio 17 2022" -A x64 @cmakeArgs
+}
+if ($LASTEXITCODE -ne 0) { throw "CMake configuration failed." }
 
 cmake --build $BuildDir --config $Config --parallel
+if ($LASTEXITCODE -ne 0) { throw "Build failed." }
 
-./scripts/deploy-windows.ps1 -BuildDir $BuildDir -Config $Config -QtDir $resolvedQtDir -Clean
+./scripts/deploy-windows.ps1 -BuildDir $BuildDir -Config $Config -QtDir $resolvedQtDir -Triplet $vcpkgTriplet -Clean
 ./scripts/check-windows-runtime.ps1 -BuildDir $BuildDir -Config $Config -QtDir $resolvedQtDir
 
 $buildPath = (Resolve-Path -LiteralPath $BuildDir).Path
 $exe = Join-Path $buildPath "$Config/LocalCall.exe"
+# Single-config generators (Ninja) write straight into the build folder.
+if (-not (Test-Path -LiteralPath $exe)) { $exe = Join-Path $buildPath "LocalCall.exe" }
 
 if (-not $NoDist) {
-    if ($Config -match '^[Dd]ebug$') {
+    if ($kitToolchain -eq "msvc" -and $Config -match '^[Dd]ebug$') {
         Write-Warning "Debug builds depend on Debug MSVC runtime DLLs and are not redistributable. Skipping installer-ready dist folder. Use: build.bat clean release"
     } else {
         $distPath = Resolve-FullPath $DistDir
         if ($Clean -and (Test-Path -LiteralPath $distPath)) {
             Remove-Item -Recurse -Force $distPath
         }
-        ./scripts/deploy-windows.ps1 -BuildDir $BuildDir -Config $Config -QtDir $resolvedQtDir -Clean -OutputDir $distPath
+        ./scripts/deploy-windows.ps1 -BuildDir $BuildDir -Config $Config -QtDir $resolvedQtDir -Triplet $vcpkgTriplet -Clean -OutputDir $distPath
         ./scripts/check-windows-runtime.ps1 -BuildDir $BuildDir -Config $Config -QtDir $resolvedQtDir -AppDir $distPath
         Write-Host ""
         Write-Host "Installer-ready folder: $distPath"

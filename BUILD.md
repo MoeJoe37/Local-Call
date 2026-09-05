@@ -79,19 +79,33 @@ build.bat debug
 build.bat clean release
 ```
 
-The batch file calls `scripts/build-windows.ps1`, auto-detects the installed Qt MSVC kit from `C:\Qt`, `%USERPROFILE%\Qt`, `QTDIR`, `Qt6_DIR`, `LOCALCALL_QT_DIR`, or `CMAKE_PREFIX_PATH`, builds with Visual Studio 2022 x64, deploys the matching Qt DLLs, and verifies the runtime files.
+The batch file calls `scripts/build-windows.ps1`, auto-detects the installed Qt kit from `C:\Qt`, `%USERPROFILE%\Qt`, `QTDIR`, `Qt6_DIR`, `LOCALCALL_QT_DIR`, or `CMAKE_PREFIX_PATH`, builds it, deploys the matching Qt DLLs, and verifies the runtime files.
+
+Both Qt kit flavours work, and the script picks everything else to match the kit:
+
+| Qt kit | Generator | vcpkg triplet | Build folder |
+| --- | --- | --- | --- |
+| `msvc2022_64` / `msvc2019_64` | Visual Studio 17 2022 x64 | `x64-windows` | `build` |
+| `mingw_64` | Ninja + Qt's MinGW toolchain | `x64-mingw-dynamic` | `build-mingw` |
+
+An MSVC kit is preferred when both are installed, because MSVC and MinGW Qt DLLs
+cannot be mixed in one build. The MinGW build uses the compiler, Ninja and
+runtime DLLs that Qt installs under `C:\Qt\Tools`, and it always builds without
+libdatachannel: vcpkg cannot build that dependency for MinGW, and LAN calls do
+not need it.
 
 PowerShell equivalent:
 
 ```powershell
 .\scripts\build-windows.ps1 -Clean
-.\build\Release\LocalCall.exe
+.\build\Release\LocalCall.exe      # MinGW kit: .\build-mingw\LocalCall.exe
 ```
 
 To force a specific Qt kit:
 
 ```powershell
 .\scripts\build-windows.ps1 -QtDir "C:/Qt/6.x.x/msvc2022_64" -VcpkgRoot "C:/vcpkg" -Clean
+.\scripts\build-windows.ps1 -QtDir "C:/Qt/6.x.x/mingw_64" -VcpkgRoot "C:/vcpkg" -Clean
 ```
 
 Manual equivalent:
@@ -134,7 +148,6 @@ For normal builds, `LOCALCALL_POST_BUILD_DEPLOY_QT` is now forced ON on Windows 
 
 ```text
 LOCALCALL_WITH_MULTIMEDIA = ON | OFF
-LOCALCALL_WITH_OPENCV     = AUTO | ON | OFF
 LOCALCALL_WITH_WEBRTC     = AUTO | ON | OFF
 LOCALCALL_INSTALL_QT_RUNTIME = ON | OFF
 LOCALCALL_POST_BUILD_DEPLOY_QT = ON | OFF
@@ -175,7 +188,7 @@ The default secure RTC build no longer requires the separate Qt WebSockets add-o
 
 ## Windows + vcpkg / Qt Runtime Notes
 
-This project uses vcpkg manifest mode through `vcpkg.json`. The Opus dependency is `opus`, not `libopus`, and OpenSSL is included in the manifest for Windows builds.
+This project uses vcpkg manifest mode through `vcpkg.json`. The Opus dependency is `opus`, not `libopus`, and OpenSSL is included in the manifest for Windows builds. `libdatachannel` sits behind the optional `webrtc` manifest feature, which the build script enables only when the WebRTC transport is requested (an MSVC kit with `-WebRTC AUTO` or `-WebRTC ON`).
 
 If CMake previously failed during vcpkg manifest install or if the executable shows an entry-point error, delete the old build directory and redeploy from the matching Qt kit:
 

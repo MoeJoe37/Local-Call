@@ -25,7 +25,6 @@
             qt6.qtbase
             qt6.qtmultimedia
             qt6.qtwayland
-            opencv
             nlohmann_json
             openssl
             opus
@@ -36,7 +35,6 @@
 
           cmakeFlags = [
             "-DLOCALCALL_WITH_WEBRTC=ON"
-            "-DLOCALCALL_WITH_OPENCV=AUTO"
             "-DLOCALCALL_WITH_MULTIMEDIA=ON"
           ];
         };
@@ -45,7 +43,7 @@
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [ cmake ninja pkg-config qt6.wrapQtAppsHook ];
-          buildInputs = with pkgs; [ qt6.qtbase qt6.qtmultimedia qt6.qtwayland opencv nlohmann_json openssl opus openh264 libyuv libdatachannel ];
+          buildInputs = with pkgs; [ qt6.qtbase qt6.qtmultimedia qt6.qtwayland nlohmann_json openssl opus openh264 libyuv libdatachannel ];
         };
       });
     };

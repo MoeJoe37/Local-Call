@@ -3,10 +3,17 @@
   "version-string": "2.0.15",
   "dependencies": [
     "nlohmann-json",
-    "libdatachannel",
     "opus",
     "openh264",
     "libyuv",
     "openssl"
-  ]
+  ],
+  "features": {
+    "webrtc": {
+      "description": "Optional libdatachannel ICE/DTLS transport (MSVC kits only)",
+      "dependencies": [
+        "libdatachannel"
+      ]
+    }
+  }
 }

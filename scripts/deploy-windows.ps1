@@ -16,7 +16,8 @@ param(
     [string]$Config = "Release",
     [string]$QtDir = "",
     [switch]$Clean,
-    [string]$OutputDir = ""
+    [string]$OutputDir = "",
+    [string]$Triplet = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -151,14 +152,46 @@ if ($Clean) {
 # against recurring Windows entry-point popups when users launch build/Release.
 Set-Content -Path (Join-Path $outDir "localcall-qt-prefix.txt") -Value $QtDir -Encoding UTF8
 
+# MinGW Qt kits link against Qt's own GCC runtime. windeployqt --compiler-runtime
+# only finds those DLLs when the toolchain is in PATH, so locate it here and copy
+# the runtime explicitly afterwards.
+$mingwBin = ""
+if ($QtDir -match "mingw|gcc_64") {
+    $qtRoot = Split-Path -Parent (Split-Path -Parent $QtDir)
+    $toolsRoot = Join-Path $qtRoot "Tools"
+    if (Test-Path $toolsRoot) {
+        $mingwBin = @(Get-ChildItem -LiteralPath $toolsRoot -Directory -Filter "mingw*" -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName "bin" } |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_ "libstdc++-6.dll") }) |
+            Select-Object -First 1
+    }
+    if ([string]::IsNullOrWhiteSpace($mingwBin)) {
+        throw "The MinGW runtime for $QtDir was not found under $toolsRoot. Install 'MinGW 64-bit' with the Qt Maintenance Tool."
+    }
+}
+
 $oldPath = $env:PATH
 try {
-    $env:PATH = "$qtBin;$oldPath"
+    $env:PATH = if ($mingwBin) { "$qtBin;$mingwBin;$oldPath" } else { "$qtBin;$oldPath" }
     $mode = if ($Config -match '^[Dd]ebug$') { "--debug" } else { "--release" }
     & $windeployqt $mode --compiler-runtime --no-translations $appPath
     if ($LASTEXITCODE -ne 0) { throw "windeployqt failed with exit code $LASTEXITCODE" }
 }
 finally { $env:PATH = $oldPath }
+
+if ($mingwBin) {
+    Write-Host "Copying MinGW runtime DLLs from: $mingwBin"
+    foreach ($runtimeDll in @("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll")) {
+        $src = Join-Path $mingwBin $runtimeDll
+        if (Test-Path $src) { Copy-Item -Force $src (Join-Path $outDir $runtimeDll) }
+    }
+    foreach ($required in @("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll")) {
+        if (-not (Test-Path (Join-Path $outDir $required))) {
+            throw "Required MinGW runtime DLL was not deployed: $required"
+        }
+    }
+}
 
 # Copy vcpkg runtime DLLs that match the selected build configuration.
 #
@@ -167,10 +200,28 @@ finally { $env:PATH = $oldPath }
 # MSVCP140D.dll and ucrtbased.dll. Those files exist on the developer PC
 # because Visual Studio is installed, but they are not redistributable and will
 # fail on a clean Windows 11 PC.
+#
+# The triplet depends on the Qt kit (x64-windows for MSVC, x64-mingw-dynamic for
+# MinGW), so take it from the build tree when the caller did not pass one.
+$vcpkgInstalled = Join-Path $buildPath "vcpkg_installed"
+if ([string]::IsNullOrWhiteSpace($Triplet)) {
+    $cachePath = Join-Path $buildPath "CMakeCache.txt"
+    if (Test-Path $cachePath) {
+        $tripletLine = Select-String -Path $cachePath -Pattern '^VCPKG_TARGET_TRIPLET:[^=]*=(.+)$' | Select-Object -First 1
+        if ($tripletLine) { $Triplet = $tripletLine.Matches[0].Groups[1].Value }
+    }
+}
+if ([string]::IsNullOrWhiteSpace($Triplet) -and (Test-Path $vcpkgInstalled)) {
+    $Triplet = @(Get-ChildItem -LiteralPath $vcpkgInstalled -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne "vcpkg" } |
+        ForEach-Object { $_.Name }) | Select-Object -First 1
+}
+if ([string]::IsNullOrWhiteSpace($Triplet)) { $Triplet = "x64-windows" }
+
 $vcpkgRuntimeBin = if ($Config -match '^[Dd]ebug$') {
-    Join-Path $buildPath "vcpkg_installed/x64-windows/debug/bin"
+    Join-Path $vcpkgInstalled "$Triplet/debug/bin"
 } else {
-    Join-Path $buildPath "vcpkg_installed/x64-windows/bin"
+    Join-Path $vcpkgInstalled "$Triplet/bin"
 }
 if (Test-Path $vcpkgRuntimeBin) {
     Write-Host "Copying vcpkg runtime DLLs from: $vcpkgRuntimeBin"

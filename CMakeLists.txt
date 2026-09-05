@@ -12,12 +12,12 @@ set(CMAKE_AUTOUIC ON)
 include(GNUInstallDirs)
 
 # Feature switches:
-#   LOCALCALL_WITH_OPENCV=AUTO|ON|OFF
-#   LOCALCALL_WITH_WEBRTC=AUTO|ON|OFF
-#   LOCALCALL_WITH_MULTIMEDIA=ON|OFF
-set(LOCALCALL_WITH_OPENCV "AUTO" CACHE STRING "Build OpenCV video/screen-share support: AUTO, ON, OFF")
-set_property(CACHE LOCALCALL_WITH_OPENCV PROPERTY STRINGS AUTO ON OFF)
-set(LOCALCALL_WITH_WEBRTC "ON" CACHE STRING "Build libdatachannel WebRTC support: AUTO, ON, OFF")
+#   LOCALCALL_WITH_MULTIMEDIA=ON|OFF   Qt Multimedia capture/playback (required for calls)
+#   LOCALCALL_WITH_WEBRTC=AUTO|ON|OFF  optional libdatachannel ICE/DTLS transport
+#
+# Calls no longer depend on libdatachannel. The LAN media stack needs only
+# Qt Multimedia + Opus (voice) and additionally OpenH264 + libyuv (video).
+set(LOCALCALL_WITH_WEBRTC "AUTO" CACHE STRING "Build libdatachannel WebRTC support: AUTO, ON, OFF")
 set_property(CACHE LOCALCALL_WITH_WEBRTC PROPERTY STRINGS AUTO ON OFF)
 option(LOCALCALL_WITH_MULTIMEDIA "Build Qt Multimedia voice-note/audio support" ON)
 option(LOCALCALL_INSTALL_DESKTOP_FILE "Install Linux .desktop launcher and icon" ON)
@@ -150,29 +150,88 @@ else()
     message(STATUS "Qt6 Multimedia: DISABLED by option")
 endif()
 
-set(HAS_OPENCV FALSE)
-if(NOT LOCALCALL_WITH_OPENCV STREQUAL "OFF")
-    find_package(OpenCV QUIET)
-    if(OpenCV_FOUND)
-        set(HAS_OPENCV TRUE)
-        message(STATUS "OpenCV: ENABLED")
-    elseif(LOCALCALL_WITH_OPENCV STREQUAL "ON")
-        message(FATAL_ERROR "OpenCV was requested but not found. Install opencv-devel/opencv or set -DLOCALCALL_WITH_OPENCV=OFF.")
-    else()
-        message(STATUS "OpenCV: not found, video/screen-share disabled")
+# ── Media codec detection ─────────────────────────────────────────────────────
+# These are detected unconditionally.  The LAN call stack is built from them and
+# does NOT require libdatachannel; gating media behind WebRTC was the reason a
+# missing optional dependency silently produced a build with no call media.
+set(OPUS_AVAILABLE FALSE)
+set(OPENH264_AVAILABLE FALSE)
+set(LIBYUV_AVAILABLE FALSE)
+
+# vcpkg's opus port is named "opus" and normally provides Opus::opus.
+# Some Linux distributions expose pkg-config/library-only installs, so keep
+# a manual fallback.
+find_package(Opus CONFIG QUIET)
+if(Opus_FOUND OR TARGET Opus::opus)
+    set(OPUS_AVAILABLE TRUE)
+else()
+    find_path(OPUS_INCLUDE_DIR opus/opus.h PATH_SUFFIXES include)
+    find_library(OPUS_LIBRARY NAMES opus libopus)
+    if(OPUS_INCLUDE_DIR AND OPUS_LIBRARY)
+        set(OPUS_AVAILABLE TRUE)
     endif()
 endif()
 
+# vcpkg's openh264 port currently installs headers/libs/pkg-config, not a
+# guaranteed CMake package config, so use find_path/find_library first.
+find_package(OpenH264 CONFIG QUIET)
+if(OpenH264_FOUND OR TARGET OpenH264::OpenH264 OR TARGET openh264::openh264)
+    set(OPENH264_AVAILABLE TRUE)
+else()
+    find_path(OPENH264_INCLUDE_DIR wels/codec_api.h PATH_SUFFIXES include)
+    find_library(OPENH264_LIBRARY NAMES openh264 libopenh264)
+    if(OPENH264_INCLUDE_DIR AND OPENH264_LIBRARY)
+        set(OPENH264_AVAILABLE TRUE)
+    endif()
+endif()
+
+find_package(libyuv CONFIG QUIET)
+if(NOT libyuv_FOUND)
+    find_package(unofficial-libyuv CONFIG QUIET)
+endif()
+if(libyuv_FOUND OR unofficial-libyuv_FOUND OR TARGET libyuv::libyuv OR TARGET unofficial::libyuv::libyuv OR TARGET yuv)
+    set(LIBYUV_AVAILABLE TRUE)
+else()
+    find_path(LIBYUV_INCLUDE_DIR libyuv.h PATH_SUFFIXES include)
+    find_library(LIBYUV_LIBRARY NAMES yuv libyuv)
+    if(LIBYUV_INCLUDE_DIR AND LIBYUV_LIBRARY)
+        set(LIBYUV_AVAILABLE TRUE)
+    endif()
+endif()
+
+# Layered call capability.
+set(HAS_MEDIA_AUDIO FALSE)
+set(HAS_MEDIA_VIDEO FALSE)
+if(HAS_MULTIMEDIA AND OPUS_AVAILABLE)
+    set(HAS_MEDIA_AUDIO TRUE)
+    if(OPENH264_AVAILABLE AND LIBYUV_AVAILABLE)
+        set(HAS_MEDIA_VIDEO TRUE)
+    endif()
+endif()
+
+if(HAS_MEDIA_VIDEO)
+    set(LOCALCALL_CALL_SUMMARY "voice+video")
+elseif(HAS_MEDIA_AUDIO)
+    set(LOCALCALL_CALL_SUMMARY "voice only (install OpenH264 + libyuv for video)")
+else()
+    set(LOCALCALL_CALL_MISSING "")
+    if(NOT HAS_MULTIMEDIA)
+        string(APPEND LOCALCALL_CALL_MISSING " Qt6Multimedia")
+    endif()
+    if(NOT OPUS_AVAILABLE)
+        string(APPEND LOCALCALL_CALL_MISSING " Opus")
+    endif()
+    set(LOCALCALL_CALL_SUMMARY "disabled (missing:${LOCALCALL_CALL_MISSING})")
+endif()
+
+# ── Optional libdatachannel WebRTC transport ──────────────────────────────────
 set(HAS_WEBRTC FALSE)
-set(OPENH264_AVAILABLE FALSE)
-set(OPUS_AVAILABLE FALSE)
-set(LIBYUV_AVAILABLE FALSE)
 set(LIBDATACHANNEL_AVAILABLE FALSE)
 set(LIBDATACHANNEL_TARGET "")
 if(NOT LOCALCALL_WITH_WEBRTC STREQUAL "OFF")
     # vcpkg currently documents LibDataChannel::LibDataChannel, while several
     # Linux/Nix packages expose lowercase package names or plain datachannel
-    # targets. Try all common variants before disabling the secure RTC path.
+    # targets. Try all common variants before disabling the RTC path.
     find_package(LibDataChannel CONFIG QUIET)
     if(NOT LibDataChannel_FOUND AND NOT TARGET LibDataChannel::LibDataChannel)
         find_package(libdatachannel CONFIG QUIET)
@@ -199,67 +258,31 @@ if(NOT LOCALCALL_WITH_WEBRTC STREQUAL "OFF")
         endif()
     endif()
 
-    # vcpkg's opus port is named "opus" and normally provides Opus::opus.
-    # Some Linux distributions expose pkg-config/library-only installs, so keep
-    # a manual fallback to avoid disabling the RTC path unnecessarily.
-    find_package(Opus CONFIG QUIET)
-    if(Opus_FOUND OR TARGET Opus::opus)
-        set(OPUS_AVAILABLE TRUE)
-    else()
-        find_path(OPUS_INCLUDE_DIR opus/opus.h PATH_SUFFIXES include)
-        find_library(OPUS_LIBRARY NAMES opus libopus)
-        if(OPUS_INCLUDE_DIR AND OPUS_LIBRARY)
-            set(OPUS_AVAILABLE TRUE)
-        endif()
-    endif()
-
-    # vcpkg's openh264 port currently installs headers/libs/pkg-config, not a
-    # guaranteed CMake package config, so use find_path/find_library first.
-    find_package(OpenH264 CONFIG QUIET)
-    if(OpenH264_FOUND OR TARGET OpenH264::OpenH264 OR TARGET openh264::openh264)
-        set(OPENH264_AVAILABLE TRUE)
-    else()
-        find_path(OPENH264_INCLUDE_DIR wels/codec_api.h PATH_SUFFIXES include)
-        find_library(OPENH264_LIBRARY NAMES openh264 libopenh264)
-        if(OPENH264_INCLUDE_DIR AND OPENH264_LIBRARY)
-            set(OPENH264_AVAILABLE TRUE)
-        endif()
-    endif()
-
-    find_package(libyuv CONFIG QUIET)
-    if(NOT libyuv_FOUND)
-        find_package(unofficial-libyuv CONFIG QUIET)
-    endif()
-    if(libyuv_FOUND OR unofficial-libyuv_FOUND OR TARGET libyuv::libyuv OR TARGET unofficial::libyuv::libyuv OR TARGET yuv)
-        set(LIBYUV_AVAILABLE TRUE)
-    else()
-        find_path(LIBYUV_INCLUDE_DIR libyuv.h PATH_SUFFIXES include)
-        find_library(LIBYUV_LIBRARY NAMES yuv libyuv)
-        if(LIBYUV_INCLUDE_DIR AND LIBYUV_LIBRARY)
-            set(LIBYUV_AVAILABLE TRUE)
-        endif()
-    endif()
-
-    if(LIBDATACHANNEL_AVAILABLE AND HAS_MULTIMEDIA AND OPUS_AVAILABLE AND OPENH264_AVAILABLE AND LIBYUV_AVAILABLE)
+    if(LIBDATACHANNEL_AVAILABLE AND HAS_MEDIA_VIDEO)
         set(HAS_WEBRTC TRUE)
         message(STATUS "WebRTC/libdatachannel: ENABLED")
     elseif(LOCALCALL_WITH_WEBRTC STREQUAL "ON")
         message(FATAL_ERROR
-            "\nWebRTC was requested, but one or more RTC dependencies were not found.\n"
-            "  Qt6 Multimedia      : ${HAS_MULTIMEDIA}\n"
-            "  libdatachannel      : ${LIBDATACHANNEL_AVAILABLE}\n"
-            "  Opus                : ${OPUS_AVAILABLE}\n"
-            "  OpenH264            : ${OPENH264_AVAILABLE}\n"
-            "  libyuv              : ${LIBYUV_AVAILABLE}\n\n"
-            "Windows fix: vcpkg installed the RTC libraries, but CMake did not find one of them. Delete build/, make sure CMAKE_TOOLCHAIN_FILE points to the same vcpkg root, then configure again.\n"
-            "Linux fix: install libdatachannel, opus, openh264, libyuv, and Qt Multimedia development packages. Qt WebSockets is no longer required.\n")
+            "
+WebRTC was requested, but one or more RTC dependencies were not found.
+"
+            "  Qt6 Multimedia      : ${HAS_MULTIMEDIA}
+"
+            "  libdatachannel      : ${LIBDATACHANNEL_AVAILABLE}
+"
+            "  Opus                : ${OPUS_AVAILABLE}
+"
+            "  OpenH264            : ${OPENH264_AVAILABLE}
+"
+            "  libyuv              : ${LIBYUV_AVAILABLE}
+
+"
+            "LAN calls do not need libdatachannel. Configure with -DLOCALCALL_WITH_WEBRTC=OFF
+"
+            "to build without it, or install libdatachannel to enable the RTC transport.
+")
     else()
-        message(STATUS "WebRTC/libdatachannel: not found, optional RTC module disabled")
-        message(STATUS "  Qt6 Multimedia      : ${HAS_MULTIMEDIA}")
-        message(STATUS "  libdatachannel      : ${LIBDATACHANNEL_AVAILABLE}")
-        message(STATUS "  Opus                : ${OPUS_AVAILABLE}")
-        message(STATUS "  OpenH264            : ${OPENH264_AVAILABLE}")
-        message(STATUS "  libyuv              : ${LIBYUV_AVAILABLE}")
+        message(STATUS "WebRTC/libdatachannel: disabled, LAN media transport is used instead")
     endif()
 endif()
 
@@ -291,6 +314,7 @@ set(LOCALCALL_SOURCES
     src/GroupManageDialog.cpp
     src/MainWindow.cpp
     src/MainWindow_logic.cpp
+    src/UiTheme.cpp
     resources/resources.qrc
 )
 
@@ -315,6 +339,7 @@ set(LOCALCALL_HEADERS
     include/SigMsg.h
     include/SignalingClient.h
     include/SignalingServer.h
+    include/UiTheme.h
 )
 
 if(HAS_MULTIMEDIA)
@@ -322,28 +347,32 @@ if(HAS_MULTIMEDIA)
     list(APPEND LOCALCALL_HEADERS include/VoiceNoteRecorder.h)
 endif()
 
-if(HAS_MULTIMEDIA OR HAS_OPENCV OR HAS_WEBRTC)
-    list(APPEND LOCALCALL_SOURCES src/CallWindow.cpp)
-    list(APPEND LOCALCALL_HEADERS include/CallWindow.h)
-    if(HAS_MULTIMEDIA OR HAS_OPENCV)
-        list(APPEND LOCALCALL_SOURCES src/MediaWorker.cpp)
-        list(APPEND LOCALCALL_HEADERS include/MediaWorker.h)
-    endif()
+# The LAN call stack. Built whenever Qt Multimedia and Opus are present, with
+# or without libdatachannel.
+if(HAS_MEDIA_AUDIO)
+    list(APPEND LOCALCALL_SOURCES
+        src/CallWindow.cpp
+        src/CallSession.cpp
+        src/MediaPipeline.cpp
+        src/JitterBuffer.cpp
+        src/MediaTransport.cpp
+        src/UdpMediaTransport.cpp
+        src/TcpMediaTransport.cpp)
+    list(APPEND LOCALCALL_HEADERS
+        include/CallWindow.h
+        include/CallSession.h
+        include/CallStats.h
+        include/MediaPacket.h
+        include/MediaPipeline.h
+        include/JitterBuffer.h
+        include/MediaTransport.h
+        include/UdpMediaTransport.h
+        include/TcpMediaTransport.h)
 endif()
 
 if(HAS_WEBRTC)
-    list(APPEND LOCALCALL_SOURCES
-        src/MdnsDiscovery.cpp
-        src/RtcPeer.cpp
-        src/MediaPipeline.cpp
-        src/UdpMediaPeer.cpp
-        src/MediaTcpPeer.cpp)
-    list(APPEND LOCALCALL_HEADERS
-        include/MdnsDiscovery.h
-        include/RtcPeer.h
-        include/MediaPipeline.h
-        include/UdpMediaPeer.h
-        include/MediaTcpPeer.h)
+    list(APPEND LOCALCALL_SOURCES src/RtcPeer.cpp)
+    list(APPEND LOCALCALL_HEADERS include/RtcPeer.h)
 endif()
 
 
@@ -398,6 +427,11 @@ if(WIN32)
         VERSION ${PROJECT_VERSION}
     )
     target_compile_definitions(LocalCall PRIVATE LOCALCALL_VERSION="${PROJECT_VERSION}")
+    if(MINGW)
+        # MinGW defaults to the ANSI WinMain entry point; the launcher uses wWinMain.
+        target_compile_options(LocalCall PRIVATE -municode)
+        target_link_options(LocalCall PRIVATE -municode)
+    endif()
     target_link_libraries(LocalCall PRIVATE shell32)
     add_dependencies(LocalCall ${LOCALCALL_QT_TARGET})
 else()
@@ -447,20 +481,19 @@ if(HAS_MULTIMEDIA)
     target_compile_definitions(${LOCALCALL_QT_TARGET} PRIVATE HAS_MULTIMEDIA=1)
 endif()
 
-if(HAS_OPENCV)
-    target_include_directories(${LOCALCALL_QT_TARGET} PRIVATE ${OpenCV_INCLUDE_DIRS})
-    target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${OpenCV_LIBS})
-    target_compile_definitions(${LOCALCALL_QT_TARGET} PRIVATE HAS_OPENCV=1)
+if(HAS_MEDIA_AUDIO)
+    target_compile_definitions(${LOCALCALL_QT_TARGET} PRIVATE HAS_MEDIA_AUDIO=1)
+
+    if(TARGET Opus::opus)
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE Opus::opus)
+    else()
+        target_include_directories(${LOCALCALL_QT_TARGET} PRIVATE ${OPUS_INCLUDE_DIR})
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${OPUS_LIBRARY})
+    endif()
 endif()
 
-if(HAS_WEBRTC)
-    if(LIBDATACHANNEL_TARGET)
-        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${LIBDATACHANNEL_TARGET})
-    else()
-        target_include_directories(${LOCALCALL_QT_TARGET} PRIVATE ${LIBDATACHANNEL_INCLUDE_DIR})
-        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${LIBDATACHANNEL_LIBRARY})
-    endif()
-    target_compile_definitions(${LOCALCALL_QT_TARGET} PRIVATE HAS_WEBRTC=1)
+if(HAS_MEDIA_VIDEO)
+    target_compile_definitions(${LOCALCALL_QT_TARGET} PRIVATE HAS_MEDIA_VIDEO=1)
 
     if(TARGET OpenH264::OpenH264)
         target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE OpenH264::OpenH264)
@@ -469,13 +502,6 @@ if(HAS_WEBRTC)
     else()
         target_include_directories(${LOCALCALL_QT_TARGET} PRIVATE ${OPENH264_INCLUDE_DIR})
         target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${OPENH264_LIBRARY})
-    endif()
-
-    if(TARGET Opus::opus)
-        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE Opus::opus)
-    else()
-        target_include_directories(${LOCALCALL_QT_TARGET} PRIVATE ${OPUS_INCLUDE_DIR})
-        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${OPUS_LIBRARY})
     endif()
 
     if(TARGET libyuv::libyuv)
@@ -488,6 +514,16 @@ if(HAS_WEBRTC)
         target_include_directories(${LOCALCALL_QT_TARGET} PRIVATE ${LIBYUV_INCLUDE_DIR})
         target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${LIBYUV_LIBRARY})
     endif()
+endif()
+
+if(HAS_WEBRTC)
+    if(LIBDATACHANNEL_TARGET)
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${LIBDATACHANNEL_TARGET})
+    else()
+        target_include_directories(${LOCALCALL_QT_TARGET} PRIVATE ${LIBDATACHANNEL_INCLUDE_DIR})
+        target_link_libraries(${LOCALCALL_QT_TARGET} PRIVATE ${LIBDATACHANNEL_LIBRARY})
+    endif()
+    target_compile_definitions(${LOCALCALL_QT_TARGET} PRIVATE HAS_WEBRTC=1)
 endif()
 
 if(WIN32)
@@ -615,8 +651,11 @@ message(STATUS "=== Local Call build configuration ===")
 message(STATUS "  Version       : ${PROJECT_VERSION}")
 message(STATUS "  Platform      : ${CMAKE_SYSTEM_NAME}")
 message(STATUS "  Qt Multimedia : ${HAS_MULTIMEDIA}")
-message(STATUS "  OpenCV        : ${HAS_OPENCV}")
-message(STATUS "  WebRTC P2P    : ${HAS_WEBRTC}")
+message(STATUS "  Opus          : ${OPUS_AVAILABLE}")
+message(STATUS "  OpenH264      : ${OPENH264_AVAILABLE}")
+message(STATUS "  libyuv        : ${LIBYUV_AVAILABLE}")
+message(STATUS "  Calls         : ${LOCALCALL_CALL_SUMMARY}")
+message(STATUS "  WebRTC P2P    : ${HAS_WEBRTC} (optional transport)")
 message(STATUS "  Qt install deploy : ${LOCALCALL_INSTALL_QT_RUNTIME}")
 message(STATUS "  Win post-build Qt deploy : ${LOCALCALL_POST_BUILD_DEPLOY_QT}")
 message(STATUS "======================================")
