@@ -8,6 +8,7 @@
 #include "FirewallHelper.h"
 #include "SigMsg.h"
 #include "WindowsRuntimeGuard.h"
+#include "UiTheme.h"
 
 int main(int argc, char* argv[])
 {
@@ -32,6 +33,9 @@ int main(int argc, char* argv[])
     // Register custom types used in cross-thread signals (queued connections).
     // Without this Qt cannot copy the value into the event queue → crash.
     qRegisterMetaType<SigMsg>("SigMsg");
+
+    // One stylesheet for the whole app; see resources/theme/localcall.qss.
+    UiTheme::apply();
 
     // ── App icon ─────────────────────────────────────────────────────────────
     // The Windows .rc file embeds the icon into the .exe for Explorer/taskbar.

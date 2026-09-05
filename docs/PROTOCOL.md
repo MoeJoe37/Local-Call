@@ -2,7 +2,7 @@
 
 Local Call keeps the classic protocol intentionally small so Windows, Linux, macOS, and future clients can interoperate without requiring a central server for LAN use.
 
-Version 2 adds a secure RTC path for calls while preserving the original length-prefixed JSON framing.
+Signalling uses length-prefixed JSON. Call media uses a separate fixed-size binary header, `LCM3`, documented below.
 
 ## Design Principles
 
@@ -12,7 +12,7 @@ Inspired by Matrix-style communication design, Local Call treats each network ac
 - **Forward compatibility:** unknown JSON fields must be ignored by receivers.
 - **Backward compatibility:** the framing stayed the same as older Local Call builds.
 - **Security extension:** critical v2 call events include an Ed25519 public key, fingerprint, and signature.
-- **Low-latency RTC:** media uses WebRTC ICE + DTLS/SCTP DataChannels instead of raw app UDP when available.
+- **Low-latency media:** call media is carried out-of-band over UDP (or TCP when UDP is blocked) using the `LCM3` header, not over the signalling channel.
 
 Local Call is not a Matrix client and does not federate with Matrix homeservers. The inspiration is architectural: versioned JSON events, extensibility, and user-controlled communication.
 
@@ -44,6 +44,32 @@ New builds may send these metadata fields:
 ```
 
 Older builds do not send `protocol`, `schema`, `app_version`, or `platform`; new builds still parse older events where safe.
+
+## Replies
+
+`chat_text` and `grp_text` events may quote the message they answer. All three
+fields are optional and are only written when a reply is actually being sent, so
+older builds neither receive nor need them:
+
+```json
+{
+  "type": "chat_text",
+  "text": "Sounds good",
+  "reply_to_ts": 1777779000000,
+  "reply_name": "MoeJoe",
+  "reply_snippet": "Are we still on for 6?"
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `reply_to_ts` | int64 | `ts` of the quoted message — the key chat history is stored under |
+| `reply_name` | string | Display name of the quoted message's sender |
+| `reply_snippet` | string | Short excerpt, so the quote renders without looking the original up |
+
+A receiver that does not understand these fields ignores them and shows a plain
+message, which is why the snippet travels with the reply rather than being
+resolved from local history.
 
 ## Signed Critical Events
 
@@ -107,11 +133,11 @@ Discovery packets are compact JSON and remain compatible with older builds.
 | Purpose | Protocol | Port |
 |---|---:|---:|
 | LAN discovery | UDP | 50005 |
-| Signaling/events | TCP | 50010 |
-| Legacy audio stream | UDP | 50100 |
-| Legacy video stream | UDP | 50105 |
-| Legacy group call | UDP | 50200 |
-| WebRTC media | UDP/TCP selected by ICE | dynamic |
+| Signalling / events | TCP | 50010 |
+| Call media (audio + video + control) | UDP | 50100 |
+| Call media fallback | TCP | 50120 |
+| Group call | UDP | 50200 |
+| WebRTC media (optional build) | UDP/TCP selected by ICE | dynamic |
 
 ## Compatibility Rule
 
@@ -124,11 +150,52 @@ Any future protocol change must follow this rule:
 5. Keep payload size limits on every receiver.
 6. Sign new critical trust/call events before sending.
 
-## v2.0.13 transport correction
+## Media Framing (`LCM3`)
 
-The libdatachannel build distributed by vcpkg exposes the stable WebRTC DataChannel API but does not expose the experimental RTP packetizer helper classes that earlier drafts attempted to use. Local Call v2.0.13 therefore transports encoded Opus and H.264 payloads through two low-latency WebRTC DataChannels:
+Call media never travels over the signalling socket. Both media transports — UDP on 50100 and
+the TCP fallback on 50120 — carry the same 24-byte header, so the two cannot drift apart. It
+replaces the four incompatible headers earlier builds used (`LCJ1`, `LCA1`, `LCM2`, `LCU1`).
 
-- `localcall-audio`
-- `localcall-video`
+```text
+offset  size  field
+  0      4    magic         'L','C','M','3'
+  4      1    tag           'A' audio | 'V' video | 'H' hello
+                            'K' keyframe request | 'P' ping | 'O' pong
+  5      1    flags         bit0 keyframe, bit1 silence/DTX
+  6      4    seq           frame sequence, big-endian, per media kind
+ 10      4    timestampMs   capture clock, big-endian
+ 14      2    chunkIndex    big-endian
+ 16      2    chunkCount    big-endian
+ 18      2    payloadLen    big-endian, bytes in this chunk
+ 20      4    senderToken   random per session, used to reject our own packets
+              ----
+               24
+```
 
-Both channels are configured as unordered with `maxRetransmits = 0` to prioritize fresh audio/video over delayed delivery. Payloads are chunked with a small Local Call frame header, reassembled by frame id, and stale incomplete frames are discarded. This keeps the secure ICE/DTLS WebRTC path while avoiding non-portable libdatachannel RTP helper APIs.
+Frames larger than 1180 bytes are split into chunks that share a `seq` and are reassembled by
+`chunkIndex`. A frame whose chunks have not all arrived when a newer sequence completes is
+discarded rather than delaying playback. On TCP the same header is read as a byte stream; a
+receiver that loses sync scans forward to the next magic instead of dropping the connection.
+
+### Payloads
+
+| Tag | Payload |
+|---|---|
+| `A` | one Opus packet, 48 kHz mono, 20 ms. Empty with `FlagSilence` set means muted or DTX. |
+| `V` | one complete H.264 Annex-B access unit. `FlagKeyframe` marks an IDR. |
+| `H` | 8-byte hello: audio codec (1), video codec (1), sample rate (4, BE), channels (1), can-receive-video (1). |
+| `K` | empty. Asks the peer to emit an IDR now. |
+| `P` / `O` | empty. RTT probe and its reply, answered by the transport itself. |
+
+### Connection setup
+
+Both sides send `H` every 250 ms on UDP until they receive one. If nothing arrives within
+1.5 s the call reopens on TCP and repeats the exchange. A peer that reports
+`canReceiveVideo = 0` (a voice call) is never sent video.
+
+### Congestion
+
+TCP drops video frames — never audio — when the socket's write queue exceeds 256 KB, and
+counts them in the call statistics. UDP does not queue, so nothing is dropped locally. Both
+transports report inbound loss once a second, and sustained loss above 5 % steps the video
+encoder's bitrate down.

@@ -104,6 +104,10 @@ struct SigMsg {
     std::optional<bool> perm_msg;
     std::optional<bool> perm_file;
     std::optional<bool> perm_call;
+    // Reply metadata (optional; peers on older builds simply ignore these)
+    std::optional<int64_t>     reply_to_ts;
+    std::optional<std::string> reply_name;
+    std::optional<std::string> reply_snippet;
     // Chunked file transfer
     std::optional<std::string> transfer_id;
     std::optional<int>         chunk_index;
@@ -143,6 +147,9 @@ inline void to_json(nlohmann::json& j, const SigMsg& m) {
     if (m.perm_msg)      j["perm_msg"]      = *m.perm_msg;
     if (m.perm_file)     j["perm_file"]     = *m.perm_file;
     if (m.perm_call)     j["perm_call"]     = *m.perm_call;
+    if (m.reply_to_ts)   j["reply_to_ts"]   = *m.reply_to_ts;
+    if (m.reply_name)    j["reply_name"]    = *m.reply_name;
+    if (m.reply_snippet) j["reply_snippet"] = *m.reply_snippet;
     if (m.transfer_id)   j["transfer_id"]   = *m.transfer_id;
     if (m.chunk_index)   j["chunk_index"]   = *m.chunk_index;
     if (m.total_chunks)  j["total_chunks"]  = *m.total_chunks;
@@ -188,6 +195,10 @@ inline void from_json(const nlohmann::json& j, SigMsg& m) {
         if (j.contains(k) && !j[k].is_null()) v = j[k].get<bool>();
     };
     ob("perm_msg", m.perm_msg); ob("perm_file", m.perm_file); ob("perm_call", m.perm_call);
+    os("reply_name", m.reply_name);
+    os("reply_snippet", m.reply_snippet);
+    if (j.contains("reply_to_ts") && j["reply_to_ts"].is_number())
+        m.reply_to_ts = j["reply_to_ts"].get<int64_t>();
     os("transfer_id", m.transfer_id);
     if (j.contains("chunk_index")  && j["chunk_index"].is_number())  m.chunk_index  = j["chunk_index"].get<int>();
     if (j.contains("total_chunks") && j["total_chunks"].is_number()) m.total_chunks = j["total_chunks"].get<int>();

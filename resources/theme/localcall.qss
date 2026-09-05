@@ -1,0 +1,582 @@
+/* Local Call — Catppuccin Mocha.
+   Single source of truth for the app's look. Widgets opt in through
+   objectName or a "class" property; inline setStyleSheet calls are
+   reserved for values that genuinely vary at runtime (avatar colours,
+   presence dots). */
+
+QMainWindow, QWidget { background: #1E1E2E; color: #CDD6F4; font-size: 13px; }
+QSplitter::handle { background: #313244; width: 1px; }
+
+/* Sidebar */
+#sidebar { background: #181825; border-right: 1px solid #313244; }
+#sidebarTop { background: #181825; border-bottom: 1px solid #313244; padding: 10px; }
+
+/* Sidebar title "Messages" */
+QLabel#sidebarTitle { color: #CBA6F7; font-size: 18px; font-weight: bold; padding: 10px 14px; }
+QLabel#myName { color: #CBA6F7; font-size: 11px; font-weight: bold; }
+
+QPushButton#discoverBtn {
+    background: transparent; color: #A6ADC8; border: none;
+    text-align: left; padding: 10px 14px; font-size: 13px;
+    border-bottom: 1px solid #313244;
+}
+QPushButton#discoverBtn:hover { background: #313244; }
+
+/* Section headers */
+QLabel.sectionHeader {
+    color: #6C7086; font-size: 10px; font-weight: bold;
+    padding: 8px 14px 2px 14px; letter-spacing: 1px;
+}
+
+/* Friend/group lists */
+QListWidget { background: #181825; border: none; outline: none; color: #CDD6F4; font-size: 14px; }
+QListWidget::item { padding: 12px 14px; border-bottom: 1px solid #313244; margin: 0; border-radius: 0; }
+QListWidget::item:hover    { background: #1E1E2E; }
+QListWidget::item:selected { background: #45475A; border-left: 4px solid #CBA6F7; }
+#friendsList::item, #groupsList::item { padding: 0; margin: 3px 8px; border: none; border-radius: 12px; }
+#friendsList::item:hover, #groupsList::item:hover { background: #232338; }
+#friendsList::item:selected, #groupsList::item:selected { background: #313244; border-left: 3px solid #CBA6F7; }
+
+/* Peer list (discover) — no padding; content comes from setItemWidget */
+#peerList::item { padding: 0; margin: 1px 4px; border-radius: 6px; border-bottom: none; }
+#peerList::item:selected { border-left: 4px solid #CBA6F7; background: #45475A; border-radius: 0; }
+
+/* Status badge */
+QLabel#statusDot { border-radius: 5px; min-width: 10px; min-height: 10px; max-width: 10px; max-height: 10px; }
+
+/* Request badge */
+#requestBadge { background: #CBA6F7; color: #11111B; border-radius: 9px;
+                font-size: 10px; font-weight: bold; padding: 1px 6px; }
+#requestsSection { background: #1E1E2E; border-radius: 6px; margin: 4px 8px; padding: 6px 8px; }
+
+/* Chat / group panel */
+#chatHeader, #groupHeader {
+    background: #1E1E2E; border-bottom: 1px solid #313244;
+    padding: 10px 16px;
+}
+QLabel#chatTitle, QLabel#groupTitle {
+    font-size: 15px; font-weight: bold; color: #CDD6F4;
+}
+#chatPanel, #groupPanel { background: #1E1E2E; }
+/* ── Message list ─────────────────────────────────────────────────────── */
+#msgArea {
+    background: #11111B;
+    border: none;
+    outline: none;
+    padding: 8px 6px;
+}
+#msgArea::item {
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    border-radius: 10px;
+}
+/* Multi-select delete used to give no feedback at all; selection was transparent. */
+#msgArea::item:selected { background: rgba(203, 166, 247, 0.16); }
+
+QLabel#chatEmptyState { color: #45475A; font-size: 14px; background: transparent; }
+QPushButton#jumpLatest {
+    background: #313244; color: #CDD6F4; border: 1px solid #45475A;
+    border-radius: 14px; padding: 6px 14px; font-size: 11px; font-weight: bold;
+}
+QPushButton#jumpLatest:hover { background: #45475A; border-color: #585B70; }
+
+/* Day separators, and the chip that System / CallEvent messages render as. */
+QLabel#dayChip, QLabel#systemChip {
+    background: #181825; color: #6C7086;
+    border-radius: 10px; padding: 4px 12px; font-size: 11px;
+}
+QLabel#systemChip { color: #A6ADC8; }
+
+/* ── Message bubbles ──────────────────────────────────────────────────── */
+/* Outgoing is mauve at 28% over crust — see UiTheme::Color::MauveDim. */
+#bubbleMine   { background: #3B2F55; }
+#bubbleTheirs { background: #313244; }
+
+/* The radii carry the bubble's place in a run: the edge facing a neighbour
+   goes flat, the outer tail stays clipped. */
+#bubbleMine[class~="solo"],    #bubbleMine[class~="first"]   { border-radius: 16px 16px  4px 16px; }
+#bubbleMine[class~="mid"],     #bubbleMine[class~="last"]    { border-radius: 16px  4px  4px 16px; }
+#bubbleTheirs[class~="solo"],  #bubbleTheirs[class~="first"] { border-radius: 16px 16px 16px  4px; }
+#bubbleTheirs[class~="mid"],   #bubbleTheirs[class~="last"]  { border-radius:  4px 16px 16px  4px; }
+
+QLabel#msgText   { color: #CDD6F4; font-size: 14px; background: transparent; border: none; }
+QLabel#msgMeta   { color: #7F849C; font-size: 10px; background: transparent; }
+QLabel#msgName   { color: #CBA6F7; font-size: 11px; font-weight: bold; background: transparent; }
+QLabel#msgAvatar { background: transparent; }
+
+/* Hover actions — always laid out, only painted on hover, so revealing them
+   cannot reflow the message. */
+#msgActions { background: transparent; }
+QPushButton#msgActionBtn { background: transparent; border: none; border-radius: 12px; }
+QPushButton#msgActionBtn:hover { background: #45475A; }
+
+/* Quoted message shown above a reply */
+#msgQuote[class~="mine"]   { background: rgba(203, 166, 247, 0.16); border-left: 3px solid #CBA6F7; border-radius: 8px; }
+#msgQuote[class~="theirs"] { background: rgba(205, 214, 244, 0.08); border-left: 3px solid #89B4FA; border-radius: 8px; }
+QLabel#msgQuoteName { color: #CBA6F7; font-size: 10px; font-weight: bold; background: transparent; }
+QLabel#msgQuoteText { color: #A6ADC8; font-size: 12px; background: transparent; }
+
+/* Typing ghost, pinned to the end of the list */
+#typingBubble { background: #313244; border-radius: 16px 16px 16px 4px; }
+#typingBubble QLabel { color: #A6ADC8; font-size: 14px; background: transparent; }
+
+/* Read-only banner */
+#readOnlyBanner {
+    background: #2A1810; color: #FAB387; border-radius: 6px;
+    padding: 8px 14px; margin: 6px 12px; font-size: 12px;
+}
+
+/* Discover panel */
+#discoverPanel { background: #1E1E2E; }
+#emptyState { color: #45475A; font-size: 15px; }
+QPushButton#addPeerBtn {
+    background: #CBA6F7; color: #11111B; border: none;
+    border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: bold;
+}
+QPushButton#addPeerBtn:hover { background: #B4BEFE; }
+
+/* Status bar */
+#statusBar { background: #181825; border-top: 1px solid #313244; padding: 4px 14px; }
+QLabel#statusText { color: #6C7086; font-size: 11px; }
+
+/* Scrollbars */
+QScrollBar:vertical { background: #181825; width: 6px; border-radius: 3px; }
+QScrollBar::handle:vertical { background: #45475A; border-radius: 3px; min-height: 20px; }
+QScrollBar::handle:vertical:hover { background: #585B70; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar:horizontal { height: 0; }
+
+/* Group member list */
+#grpMembers { background: #181825; border-left: 1px solid #313244; min-width: 140px; max-width: 180px; }
+QLabel#grpMemberHeader { color: #6C7086; font-size: 10px; font-weight: bold;
+                         padding: 8px 12px 2px 12px; letter-spacing: 1px; }
+
+/* Upload / download progress — a hairline along the composer's top edge. */
+QProgressBar#uploadBar {
+    background: transparent; border: none; border-radius: 2px;
+    text-align: center; color: transparent;
+}
+QProgressBar#uploadBar::chunk { background: #CBA6F7; border-radius: 2px; }
+
+/* Call buttons in chat header */
+QPushButton#btnCallVoice, QPushButton#btnCallVideo {
+    background: #313244; color: #CDD6F4; border: none;
+    border-radius: 8px; padding: 6px 12px; font-size: 14px;
+}
+QPushButton#btnCallVoice:hover, QPushButton#btnCallVideo:hover { background: #45475A; }
+
+/* Context menus */
+QMenu { background: #181825; color: #CDD6F4; border: 1px solid #45475A; border-radius: 6px; }
+QMenu::item { padding: 8px 16px; }
+QMenu::item:selected { background: #CBA6F7; color: #11111B; }
+QMenu::separator { height: 1px; background: #45475A; margin: 2px 8px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Sidebar / discover / chat chrome
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+QPushButton#btnEditProfile {
+    background: transparent; color: #6C7086; border: none; font-size: 14px;
+}
+QPushButton#btnEditProfile:hover { color: #CBA6F7; }
+
+QLabel#requestBadge {
+    background: #CBA6F7; color: #11111B; border-radius: 7px;
+    font-size: 9px; font-weight: bold; padding: 1px 5px;
+}
+#requestsList { background: transparent; border: none; }
+#requestsList::item { padding: 0; margin: 1px 4px; border-radius: 4px; border-bottom: none; }
+#requestsDivider { background: #3A1010; margin: 4px 12px; }
+
+QPushButton#btnNewGroup {
+    background: #CBA6F7; color: #11111B; border: none; border-radius: 12px;
+}
+QPushButton#btnNewGroup:hover { background: #B4BEFE; }
+
+#discoverHeader { background: #1E1E2E; border-bottom: 1px solid #313244; }
+QLabel#discoverTitle { font-size: 15px; font-weight: bold; color: #CDD6F4; }
+
+QPushButton#btnRefresh {
+    background: #313244; color: #CDD6F4; border: none;
+    border-radius: 4px; padding: 6px 12px; font-size: 13px;
+}
+QPushButton#btnRefresh:hover    { background: #45475A; }
+QPushButton#btnRefresh:disabled { color: #585B70; }
+
+#ipRow { background: #1E1E2E; border-top: 1px solid #313244; }
+QLineEdit#ipSearchInput {
+    background: #313244; color: #CDD6F4; border: 1px solid #45475A;
+    border-radius: 4px; padding: 5px 8px; font-size: 12px;
+}
+QLineEdit#ipSearchInput:focus { border-color: #CBA6F7; }
+
+QPushButton#headerBackBtn {
+    background: transparent; color: #A6ADC8; border: none;
+    border-radius: 9px; padding: 0;
+}
+QPushButton#headerBackBtn:hover { background: #313244; }
+
+QPushButton#headerActionBtn {
+    background: #313244; color: #CDD6F4; border: none;
+    border-radius: 10px; padding: 0;
+}
+QPushButton#headerActionBtn:hover  { background: #45475A; }
+QPushButton#headerActionBtn:pressed { background: #45475A; }
+
+#grpMemberList { background: transparent; border: none; }
+#grpMemberList::item {
+    padding: 6px 12px; color: #A6ADC8; font-size: 12px; border-bottom: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Call window
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+#callWindow { background: #11111B; }
+
+#callHeader {
+    background: #181825;
+    border-bottom: 1px solid #313244;
+}
+QLabel#callPeerName { color: #CDD6F4; font-size: 15px; font-weight: bold; }
+QLabel#callTimer    { color: #A6ADC8; font-size: 13px; font-family: "Consolas", monospace; }
+QLabel#callStatus   { color: #A6ADC8; font-size: 12px; }
+
+QLabel#secureBadge {
+    color: #A6E3A1; background: #1B2A20; border-radius: 9px;
+    padding: 2px 10px; font-size: 11px; font-weight: bold;
+}
+QLabel#transportBadge {
+    color: #CBA6F7; background: #2A2140; border-radius: 9px;
+    padding: 2px 10px; font-size: 11px; font-weight: bold;
+}
+
+#videoStage { background: #0B0B12; }
+
+QLabel#statsOverlay {
+    background: rgba(17, 17, 27, 220);
+    color: #A6ADC8;
+    border: 1px solid #313244;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-family: "Consolas", monospace;
+    font-size: 11px;
+}
+
+#callControls {
+    background: #181825;
+    border-top: 1px solid #313244;
+}
+
+/* Round control buttons. The checked state is the "off"/active-danger state
+   for mute and camera, so it reads red rather than accented. */
+QPushButton.callBtn {
+    background: #313244; color: #CDD6F4; border: none;
+    border-radius: 24px; min-width: 48px; min-height: 48px;
+    max-width: 48px; max-height: 48px;
+}
+QPushButton.callBtn:hover    { background: #45475A; }
+QPushButton.callBtn:pressed  { background: #585B70; }
+QPushButton.callBtn:checked  { background: #F38BA8; }
+QPushButton.callBtn:disabled { background: #232338; color: #45475A; }
+
+QPushButton#btnScreen:checked { background: #CBA6F7; }
+QPushButton#btnStats:checked  { background: #CBA6F7; }
+
+QPushButton#btnHangup {
+    background: #F38BA8; color: #11111B; border: none;
+    border-radius: 24px; min-width: 64px; min-height: 48px;
+    max-height: 48px; font-weight: bold;
+}
+QPushButton#btnHangup:hover   { background: #EBA0AC; }
+QPushButton#btnHangup:pressed { background: #E64553; }
+
+#qualityPanel QLabel { color: #6C7086; font-size: 11px; }
+QComboBox {
+    background: #313244; color: #CDD6F4; border: 1px solid #45475A;
+    border-radius: 6px; padding: 4px 8px; font-size: 12px; min-width: 74px;
+}
+QComboBox:hover { border-color: #CBA6F7; }
+QComboBox::drop-down { border: none; width: 16px; }
+QComboBox QAbstractItemView {
+    background: #181825; color: #CDD6F4;
+    border: 1px solid #45475A; selection-background-color: #CBA6F7;
+    selection-color: #11111B; outline: none;
+}
+QCheckBox { color: #A6ADC8; font-size: 12px; spacing: 6px; }
+QCheckBox::indicator {
+    width: 14px; height: 14px; border-radius: 4px;
+    border: 1px solid #45475A; background: #313244;
+}
+QCheckBox::indicator:checked { background: #CBA6F7; border-color: #CBA6F7; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Toast notifications
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+#notifCard {
+    background: #181825;
+    border: 1px solid #45475A;
+    border-radius: 12px;
+}
+QLabel#notifTitle { color: #CDD6F4; font-size: 13px; font-weight: bold; }
+QLabel#notifBody  { color: #A6ADC8; font-size: 12px; }
+
+QPushButton#notifAccept {
+    background: #A6E3A1; color: #11111B; border: none;
+    border-radius: 8px; padding: 6px 16px; font-weight: bold; font-size: 12px;
+}
+QPushButton#notifAccept:hover { background: #94E2D5; }
+QPushButton#notifReject {
+    background: #F38BA8; color: #11111B; border: none;
+    border-radius: 8px; padding: 6px 16px; font-weight: bold; font-size: 12px;
+}
+QPushButton#notifReject:hover { background: #EBA0AC; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   List rows — friends, groups, discovered peers, friend requests
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+#listRow { background: transparent; }
+
+QLabel#statusDot     { border-radius: 5px; background: #45475A; }
+QLabel#statusDot.on  { background: #A6E3A1; }
+QLabel#statusDot.off { background: #45475A; }
+
+QLabel#rowAvatar {
+    border-radius: 19px;
+    font-size: 13px;
+    font-weight: 700;
+    background: #313244;
+    color: #CDD6F4;
+}
+QLabel#rowAvatar.on     { background: #CBA6F7; color: #11111B; }
+QLabel#rowAvatar.off    { background: #313244; color: #CDD6F4; }
+QLabel#rowAvatar.locked { background: #20202E; color: #6C7086; }
+
+QLabel#rowTitle        { color: #CDD6F4; font-size: 13px; font-weight: 600; }
+QLabel#rowTitle.locked { color: #6C7086; }
+
+QLabel#rowSubtitle     { color: #6C7086; font-size: 10px; }
+QLabel#rowSubtitle.on  { color: #A6E3A1; }
+
+QLabel#rowPing {
+    color: #6C7086;
+    background: #11111B;
+    border: 1px solid #313244;
+    border-radius: 9px;
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 6px;
+}
+QLabel#rowPing.on { color: #A6E3A1; }
+
+QLabel#rowBadge {
+    background: #CBA6F7; color: #11111B;
+    border-radius: 11px;
+    font-size: 10px; font-weight: 700;
+    padding: 0 6px;
+}
+
+QLabel#peerName { color: #CDD6F4; font-size: 13px; font-weight: 500; }
+
+QPushButton#btnAddPeer {
+    background: #CBA6F7; color: #1E1E2E; border: none;
+    border-radius: 15px; font-size: 18px; font-weight: bold;
+}
+QPushButton#btnAddPeer:hover    { background: #B4BEFE; }
+QPushButton#btnAddPeer:disabled { background: #45475A; color: #6C7086; }
+
+QLabel#reqName { color: #CDD6F4; font-size: 13px; font-weight: 500; }
+QLabel#reqIp   { color: #6C7086; font-size: 10px; }
+
+QPushButton#reqAccept {
+    background: #CBA6F7; color: #11111B; border: none;
+    border-radius: 6px; font-size: 11px; font-weight: bold; padding: 0 10px;
+}
+QPushButton#reqAccept:hover { background: #B4BEFE; }
+QPushButton#reqDecline {
+    background: #313244; color: #F38BA8; border: none;
+    border-radius: 6px; font-size: 11px; padding: 0 10px;
+}
+QPushButton#reqDecline:hover { background: #45475A; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Chat bubble contents
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+QPushButton#msgToggle {
+    color: #CBA6F7; font-size: 11px; background: transparent;
+    border: none; padding: 2px 0; text-align: left;
+}
+QPushButton#msgToggle:hover { color: #CDD6F4; }
+
+QLabel#msgImage { background: transparent; }
+QPushButton#imgSaveBtn {
+    background: rgba(17, 17, 27, 0.72); border: none; border-radius: 13px;
+}
+QPushButton#imgSaveBtn:hover { background: rgba(17, 17, 27, 0.92); }
+
+/* File and voice-note cards inside a bubble; tinted to match the bubble. */
+#msgAttachBox                  { background: #45475A; border-radius: 10px; }
+#msgAttachBox[class~="mine"]   { background: rgba(203, 166, 247, 0.14); }
+#msgAttachBox[class~="theirs"] { background: #45475A; }
+
+QLabel#attachTile { background: #CBA6F7; border-radius: 10px; }
+QLabel#attachName { color: #CDD6F4; font-size: 13px; font-weight: bold; background: transparent; }
+QLabel#attachSize { color: #7F849C; font-size: 11px; background: transparent; }
+
+QPushButton#attachAction {
+    background: rgba(205, 214, 244, 0.10); border: none; border-radius: 15px;
+}
+QPushButton#attachAction:hover { background: rgba(205, 214, 244, 0.22); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Composer
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+#composerBar { background: #11111B; }
+QLabel#composerStatus {
+    color: #CBA6F7; font-size: 11px; font-style: italic; background: transparent;
+}
+
+#composerCard {
+    background: #1E1E2E; border: 1px solid #313244; border-radius: 18px;
+}
+
+QPlainTextEdit#composerInput {
+    background: transparent; color: #CDD6F4; border: none;
+    font-size: 14px; padding: 5px 4px;
+    selection-background-color: #CBA6F7; selection-color: #11111B;
+}
+
+QPushButton#composerBtn { background: transparent; border: none; border-radius: 17px; }
+QPushButton#composerBtn:hover    { background: #313244; }
+QPushButton#composerBtn:checked  { background: rgba(243, 139, 168, 0.22); }
+QPushButton#composerBtn:disabled { background: transparent; }
+
+/* Muted while there is nothing to send, accent-filled once there is. */
+QPushButton#composerSend { background: #313244; border: none; border-radius: 17px; }
+QPushButton#composerSend[class~="active"]       { background: #CBA6F7; }
+QPushButton#composerSend[class~="active"]:hover { background: #B4BEFE; }
+
+/* Reply chip inside the composer */
+#replyChip {
+    background: rgba(203, 166, 247, 0.12);
+    border-left: 3px solid #CBA6F7; border-radius: 8px;
+}
+QLabel#replyChipName { color: #CBA6F7; font-size: 11px; font-weight: bold; background: transparent; }
+QLabel#replyChipText { color: #A6ADC8; font-size: 12px; background: transparent; }
+QPushButton#replyChipClose { background: transparent; border: none; border-radius: 11px; }
+QPushButton#replyChipClose:hover { background: #313244; }
+
+/* Voice-note recording strip */
+QLabel#recordDot { background: #F38BA8; border-radius: 5px; }
+QLabel#recordDot[class~="dim"] { background: #585B70; }
+QLabel#recordTime { color: #F38BA8; font-size: 13px; font-weight: bold; background: transparent; }
+QLabel#recordHint { color: #6C7086; font-size: 12px; background: transparent; }
+QPushButton#recordCancel {
+    background: transparent; color: #A6ADC8; border: none;
+    border-radius: 8px; padding: 6px 12px; font-size: 12px;
+}
+QPushButton#recordCancel:hover { background: #313244; color: #F38BA8; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Dialogs
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+QMessageBox { background: #1E1E2E; }
+QMessageBox QLabel { color: #CDD6F4; }
+QMessageBox QPushButton {
+    background: #313244; color: #CDD6F4; border: none;
+    border-radius: 6px; padding: 6px 18px; min-width: 64px;
+}
+QMessageBox QPushButton:hover { background: #45475A; }
+
+QPushButton#notifBtn {
+    background: #313244; color: #CDD6F4; border: none;
+    border-radius: 8px; padding: 6px 16px; font-size: 12px; min-width: 64px;
+}
+QPushButton#notifBtn:hover { background: #45475A; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Modal dialogs
+
+   Scoped by dialog objectName on purpose: CallWindow and NotificationWindow
+   are QDialogs too, and a bare "QDialog QPushButton" rule would repaint their
+   controls.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+#inputDialog, #groupCreateDialog, #groupManageDialog { background: #1E1E2E; }
+
+#inputDialog QLabel,
+#groupCreateDialog QLabel,
+#groupManageDialog QLabel { color: #CDD6F4; font-size: 13px; }
+
+#inputDialog QLineEdit,
+#groupCreateDialog QLineEdit {
+    background: #313244; color: #CDD6F4; border: 1px solid #45475A;
+    border-radius: 6px; padding: 6px 10px; font-size: 13px;
+}
+#inputDialog QLineEdit:focus,
+#groupCreateDialog QLineEdit:focus { border-color: #CBA6F7; }
+
+#inputDialog QPushButton,
+#groupCreateDialog QPushButton {
+    background: #CBA6F7; color: #11111B; border: none;
+    border-radius: 6px; padding: 7px 20px; font-size: 13px;
+}
+#inputDialog QPushButton:hover,
+#groupCreateDialog QPushButton:hover { background: #B4BEFE; }
+#inputDialog QPushButton#cancel,
+#groupCreateDialog QPushButton#cancel { background: #313244; color: #CDD6F4; }
+#inputDialog QPushButton#cancel:hover,
+#groupCreateDialog QPushButton#cancel:hover { background: #45475A; }
+
+#groupCreateDialog QListWidget {
+    background: #181825; color: #CDD6F4; border: 1px solid #313244;
+    border-radius: 6px; font-size: 13px;
+}
+#groupCreateDialog QListWidget::item          { padding: 6px 8px; }
+#groupCreateDialog QListWidget::item:hover    { background: #313244; }
+#groupCreateDialog QListWidget::item:selected { background: #45475A; }
+
+#groupManageDialog QScrollArea      { background: #181825; border: none; }
+#groupManageDialog #memberContainer { background: #181825; }
+#groupManageDialog QFrame#memberRow { background: #1E1E2E; border-bottom: 1px solid #313244; }
+
+QLabel#dlgTitle    { color: #CDD6F4; font-size: 16px; font-weight: bold; }
+QLabel#dlgSubtitle { color: #A6ADC8; font-size: 12px; }
+
+QLabel#memberName       { color: #CDD6F4; font-size: 13px; }
+QLabel#memberName.me    { color: #CBA6F7; }
+
+#groupManageDialog QPushButton.action {
+    background: #313244; color: #A6ADC8; border: none;
+    border-radius: 4px; padding: 3px 10px; font-size: 11px;
+}
+#groupManageDialog QPushButton.action:hover { background: #45475A; }
+#groupManageDialog QPushButton.danger {
+    background: #2A1010; color: #F38BA8; border: none;
+    border-radius: 4px; padding: 3px 10px; font-size: 11px;
+}
+#groupManageDialog QPushButton.danger:hover { background: #3D1515; }
+
+#groupManageDialog QPushButton#addBtn {
+    background: #CBA6F7; color: #11111B; border: none;
+    border-radius: 6px; padding: 6px 14px; font-size: 12px;
+}
+#groupManageDialog QPushButton#addBtn:hover { background: #B4BEFE; }
+#groupManageDialog QPushButton#deleteBtn {
+    background: #2A1010; color: #F38BA8; border: none;
+    border-radius: 6px; padding: 6px 14px; font-size: 12px;
+}
+#groupManageDialog QPushButton#deleteBtn:hover { background: #3D1515; }
+
+#groupManageDialog QCheckBox { color: #A6ADC8; font-size: 11px; }
+#groupManageDialog QComboBox {
+    background: #313244; color: #CDD6F4; border: 1px solid #45475A;
+    border-radius: 6px; padding: 4px 8px; font-size: 12px;
+}

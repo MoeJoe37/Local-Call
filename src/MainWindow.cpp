@@ -2,11 +2,15 @@
 using json = nlohmann::json;
 #include "MainWindow.h"
 #include "Helpers.h"
+#include "UiTheme.h"
 #include "SignalingClient.h"
 #include "NotificationWindow.h"
 #include "InputDialog.h"
 #include "GroupCreateDialog.h"
 #include "GroupManageDialog.h"
+#include "ChatView.h"
+#include "ChatBubble.h"
+#include "ChatComposer.h"
 #include <QApplication>
 #include <QGuiApplication>
 #include <QClipboard>
@@ -47,212 +51,23 @@ using json = nlohmann::json;
 #pragma comment(lib, "dwmapi.lib")
 #endif
 
-// ── Stylesheet ────────────────────────────────────────────────────────────────
-// Updated to match the new chat UI style (lavender #CBA6F7 accent, Catppuccin Mocha)
-static constexpr const char* APP_STYLE = R"(
-QMainWindow, QWidget { background: #1E1E2E; color: #CDD6F4; font-size: 13px; }
-QSplitter::handle { background: #313244; width: 1px; }
-
-/* Sidebar */
-#sidebar { background: #181825; border-right: 1px solid #313244; }
-#sidebarTop { background: #181825; border-bottom: 1px solid #313244; padding: 10px; }
-
-/* Sidebar title "Messages" */
-QLabel#sidebarTitle { color: #CBA6F7; font-size: 18px; font-weight: bold; padding: 10px 14px; }
-QLabel#myName { color: #CBA6F7; font-size: 11px; font-weight: bold; }
-
-QPushButton#discoverBtn {
-    background: transparent; color: #A6ADC8; border: none;
-    text-align: left; padding: 10px 14px; font-size: 13px;
-    border-bottom: 1px solid #313244;
-}
-QPushButton#discoverBtn:hover { background: #313244; }
-
-/* Section headers */
-QLabel.sectionHeader {
-    color: #6C7086; font-size: 10px; font-weight: bold;
-    padding: 8px 14px 2px 14px; letter-spacing: 1px;
-}
-
-/* Friend/group lists */
-QListWidget { background: #181825; border: none; outline: none; color: #CDD6F4; font-size: 14px; }
-QListWidget::item { padding: 12px 14px; border-bottom: 1px solid #313244; margin: 0; border-radius: 0; }
-QListWidget::item:hover    { background: #1E1E2E; }
-QListWidget::item:selected { background: #45475A; border-left: 4px solid #CBA6F7; }
-#friendsList::item, #groupsList::item { padding: 0; margin: 3px 8px; border: none; border-radius: 12px; }
-#friendsList::item:hover, #groupsList::item:hover { background: #232338; }
-#friendsList::item:selected, #groupsList::item:selected { background: #313244; border-left: 3px solid #CBA6F7; }
-
-/* Peer list (discover) — no padding; content comes from setItemWidget */
-#peerList::item { padding: 0; margin: 1px 4px; border-radius: 6px; border-bottom: none; }
-#peerList::item:selected { border-left: 4px solid #CBA6F7; background: #45475A; border-radius: 0; }
-
-/* Status badge */
-QLabel#statusDot { border-radius: 5px; min-width: 10px; min-height: 10px; max-width: 10px; max-height: 10px; }
-
-/* Request badge */
-#requestBadge { background: #CBA6F7; color: #11111B; border-radius: 9px;
-                font-size: 10px; font-weight: bold; padding: 1px 6px; }
-#requestsSection { background: #1E1E2E; border-radius: 6px; margin: 4px 8px; padding: 6px 8px; }
-
-/* Chat / group panel */
-#chatHeader, #groupHeader {
-    background: #1E1E2E; border-bottom: 1px solid #313244;
-    padding: 10px 16px;
-}
-QLabel#chatTitle, QLabel#groupTitle {
-    font-size: 15px; font-weight: bold; color: #CDD6F4;
-}
-#chatPanel, #groupPanel { background: #1E1E2E; }
-#msgArea {
-    background: #11111B;
-    border: none;
-    outline: none;
-    padding: 14px 18px;
-}
-#msgArea::item {
-    background: transparent;
-    border: none;
-    padding: 0;
-    margin: 2px 0;
-}
-#msgArea::item:hover, #msgArea::item:selected {
-    background: transparent;
-    border: none;
-}
-
-/* Message bubbles */
-#bubbleMine    { background: #5A3E8A; border-radius: 18px 18px 5px 18px; }
-#bubbleTheirs  { background: #26293D; border-radius: 18px 18px 18px 5px; }
-QLabel#msgText { color: #F4F4FB; font-size: 14px; line-height: 135%; background: transparent; border: none; }
-QTextEdit#msgText { color: #EDEFFB; font-size: 14px; }
-QLabel#msgMeta { color: #6C7086; font-size: 10px; }
-QLabel#msgName { color: #CBA6F7; font-size: 11px; font-weight: bold; }
-
-/* Input bar */
-#inputBar { background: #11111B; border-top: 1px solid #24263A; padding: 12px 18px; }
-QLineEdit#chatInput, QLineEdit#groupInput {
-    background: #171827; color: #F5F6FF;
-    border: 1px solid #343756; border-radius: 20px;
-    padding: 10px 16px; font-size: 14px; min-height: 32px;
-    selection-background-color: #CBA6F7; selection-color: #11111B;
-}
-QLineEdit#chatInput:hover, QLineEdit#groupInput:hover {
-    background:#1D1F33; border-color:#51577A;
-}
-QLineEdit#chatInput:focus, QLineEdit#groupInput:focus {
-    background: #20243A; border: 1px solid #CBA6F7;
-}
-QPushButton#sendBtn {
-    background: #CBA6F7; color: #11111B; border: none;
-    border-radius: 20px; padding: 9px 20px; font-size: 13px; font-weight: bold;
-    min-width: 80px; min-height: 32px;
-}
-QPushButton#sendBtn:hover { background: #B4BEFE; }
-QPushButton#sendBtn:pressed { background: #A6E3A1; }
-QPushButton.toolBtn {
-    background: transparent; color: #A6ADC8; border: none;
-    border-radius: 8px; padding: 6px 10px; font-size: 14px;
-}
-QPushButton.toolBtn:hover { background: #313244; }
-
-/* Read-only banner */
-#readOnlyBanner {
-    background: #2A1810; color: #FAB387; border-radius: 6px;
-    padding: 8px 14px; margin: 6px 12px; font-size: 12px;
-}
-
-/* Discover panel */
-#discoverPanel { background: #1E1E2E; }
-#emptyState { color: #45475A; font-size: 15px; }
-QPushButton#addPeerBtn {
-    background: #CBA6F7; color: #11111B; border: none;
-    border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: bold;
-}
-QPushButton#addPeerBtn:hover { background: #B4BEFE; }
-
-/* Status bar */
-#statusBar { background: #181825; border-top: 1px solid #313244; padding: 4px 14px; }
-QLabel#statusText { color: #6C7086; font-size: 11px; }
-
-/* Scrollbars */
-QScrollBar:vertical { background: #181825; width: 6px; border-radius: 3px; }
-QScrollBar::handle:vertical { background: #45475A; border-radius: 3px; min-height: 20px; }
-QScrollBar::handle:vertical:hover { background: #585B70; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar:horizontal { height: 0; }
-
-/* Group member list */
-#grpMembers { background: #181825; border-left: 1px solid #313244; min-width: 140px; max-width: 180px; }
-QLabel#grpMemberHeader { color: #6C7086; font-size: 10px; font-weight: bold;
-                         padding: 8px 12px 2px 12px; letter-spacing: 1px; }
-
-/* Recording indicator */
-QLabel#recording { color: #F38BA8; font-size: 11px; font-weight: bold; }
-
-/* Typing / upload status indicator */
-QLabel#chatStatusLabel {
-    color: #CBA6F7; font-size: 11px; font-style: italic;
-    padding: 2px 14px 0 14px;
-}
-/* Upload / download progress bar */
-QProgressBar#uploadBar {
-    background: #313244; border: none; border-radius: 3px;
-    height: 4px; text-align: center; color: transparent;
-}
-QProgressBar#uploadBar::chunk { background: #CBA6F7; border-radius: 3px; }
-
-/* Message area selection is transparent; delete still works through right-click. */
-#msgArea::item:selected { background: transparent; border: none; }
-#msgArea::item:hover    { background: transparent; border: none; }
-
-/* Buttons inside chat toolbar */
-#chatToolbar QPushButton { background: transparent; color: #A6ADC8; border: none;
-    border-radius: 8px; padding: 6px 10px; font-size: 12px; }
-#chatToolbar QPushButton:hover { background: #313244; }
-
-/* Call buttons in chat header */
-QPushButton#btnCallVoice, QPushButton#btnCallVideo {
-    background: #313244; color: #CDD6F4; border: none;
-    border-radius: 8px; padding: 6px 12px; font-size: 14px;
-}
-QPushButton#btnCallVoice:hover, QPushButton#btnCallVideo:hover { background: #45475A; }
-
-/* Context menus */
-QMenu { background: #181825; color: #CDD6F4; border: 1px solid #45475A; border-radius: 6px; }
-QMenu::item { padding: 8px 16px; }
-QMenu::item:selected { background: #CBA6F7; color: #11111B; }
-QMenu::separator { height: 1px; background: #45475A; margin: 2px 8px; }
-)";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  BUILD SIDEBAR
 // ══════════════════════════════════════════════════════════════════════════════
 
-static QLabel* makeStatusDot(QWidget* parent, const QString& color = "#555555") {
+static QLabel* makeStatusDot(QWidget* parent, bool online = false) {
     auto* dot = new QLabel(parent);
     dot->setObjectName("statusDot");
     dot->setFixedSize(10, 10);
-    dot->setStyleSheet(QString("background: %1; border-radius: 5px;").arg(color));
+    UiTheme::setClass(dot, online ? "on" : "off");
     return dot;
 }
 
 static QWidget* makeSectionHeader(const QString& text, QWidget* parent) {
     auto* lbl = new QLabel(text.toUpper(), parent);
     lbl->setProperty("class", "sectionHeader");
-    lbl->setStyleSheet("color: #6C7086; font-size: 10px; font-weight: bold;"
-                       " padding: 8px 14px 2px 14px; letter-spacing: 1px;");
     return lbl;
-}
-
-static QIcon lcIcon(const QString& name) {
-    return QIcon(QStringLiteral(":/icons/") + name + QStringLiteral(".png"));
-}
-
-static void applyIcon(QPushButton* button, const QString& iconName, int px = 18) {
-    if (!button) return;
-    button->setIcon(lcIcon(iconName));
-    button->setIconSize(QSize(px, px));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -285,7 +100,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     setWindowTitle("Local Call");
     setMinimumSize(900, 580);
     resize(1100, 680);
-    setStyleSheet(APP_STYLE);
 
 #ifdef HAS_MULTIMEDIA
     m_vnRec      = new VoiceNoteRecorder(this);
@@ -328,17 +142,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     m_lblMyName->setObjectName("myName");
     m_lblMyName->setWordWrap(true);
     auto* btnEdit = new QPushButton("", sideTop);
-    applyIcon(btnEdit, "edit", 16);
+    UiTheme::applyIcon(btnEdit, "edit", 16);
     btnEdit->setFixedSize(28, 28);
     btnEdit->setToolTip("Edit profile");
-    btnEdit->setStyleSheet("background:transparent;color:#6C7086;border:none;font-size:14px;");
+    btnEdit->setObjectName("btnEditProfile");
     sideTopLayout->addWidget(m_lblMyName, 1);
     sideTopLayout->addWidget(btnEdit);
     sideLayout->addWidget(sideTop);
 
     // Discover button
     auto* discBtn = new QPushButton("Discover Peers", sidebar);
-    applyIcon(discBtn, "discover", 16);
+    UiTheme::applyIcon(discBtn, "discover", 16);
     discBtn->setObjectName("discoverBtn");
     sideLayout->addWidget(discBtn);
 
@@ -355,11 +169,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     auto* reqHeaderL = new QHBoxLayout(reqHeaderW);
     reqHeaderL->setContentsMargins(12, 6, 12, 4);
     auto* reqLbl = new QLabel("REQUESTS", reqHeaderW);
-    reqLbl->setStyleSheet("color:#6C7086;font-size:10px;font-weight:bold;letter-spacing:1px;");
+    reqLbl->setProperty("class", "sectionHeader");
     m_lblRequestCount = new QLabel("0", reqHeaderW);
-    m_lblRequestCount->setStyleSheet(
-        "background:#CBA6F7;color:#11111B;border-radius:7px;"
-        "font-size:9px;font-weight:bold;padding:1px 5px;");
+    m_lblRequestCount->setObjectName("requestBadge");
     reqHeaderL->addWidget(reqLbl, 1);
     reqHeaderL->addWidget(m_lblRequestCount);
     reqSecLayout->addWidget(reqHeaderW);
@@ -369,15 +181,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     m_requestsList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_requestsList->setResizeMode(QListView::Adjust);
     m_requestsList->setUniformItemSizes(false);
-    m_requestsList->setStyleSheet(
-        "QListWidget{background:transparent;border:none;}"
-        "QListWidget::item{padding:0;margin:1px 4px;border-radius:4px;}");
+    m_requestsList->setObjectName("requestsList");
     reqSecLayout->addWidget(m_requestsList);
 
     // Divider below the section
     auto* reqDivider = new QWidget(m_requestsSection);
     reqDivider->setFixedHeight(1);
-    reqDivider->setStyleSheet("background:#3A1010;margin:4px 12px;");
+    reqDivider->setObjectName("requestsDivider");
     reqSecLayout->addWidget(reqDivider);
 
     sideLayout->addWidget(m_requestsSection);
@@ -395,13 +205,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     auto* grpHeader = new QHBoxLayout();
     grpHeader->setContentsMargins(14,8,8,2);
     auto* grpLbl = new QLabel("GROUPS", sidebar);
-    grpLbl->setStyleSheet("color:#6C7086;font-size:10px;font-weight:bold;letter-spacing:1px;");
+    grpLbl->setProperty("class", "sectionHeader");
     auto* btnNewGrp = new QPushButton("", sidebar);
-    applyIcon(btnNewGrp, "add", 16);
+    UiTheme::applyIcon(btnNewGrp, "add", 16);
     btnNewGrp->setFixedSize(24, 24);
     btnNewGrp->setIconSize(QSize(16,16));
     btnNewGrp->setToolTip("New group");
-    btnNewGrp->setStyleSheet("background:#CBA6F7;color:#11111B;border:none;border-radius:12px;");
+    btnNewGrp->setObjectName("btnNewGroup");
     grpHeader->addWidget(grpLbl, 1);
     grpHeader->addWidget(btnNewGrp);
     auto* grpHeaderWidget = new QWidget(sidebar);
@@ -443,20 +253,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
     // Header
     auto* discHeader = new QWidget();
-    discHeader->setStyleSheet("background:#1E1E2E;border-bottom:1px solid #313244;");
+    discHeader->setObjectName("discoverHeader");
     auto* discHeaderLayout = new QHBoxLayout(discHeader);
     discHeaderLayout->setContentsMargins(16,12,12,12);
     auto* discTitle = new QLabel("Discover Peers", discHeader);
-    discTitle->setStyleSheet("font-size:15px;font-weight:bold;color:#CDD6F4;");
+    discTitle->setObjectName("discoverTitle");
     m_btnRefresh = new QPushButton("Scan", discHeader);
-    applyIcon(m_btnRefresh, "refresh", 16);
+    UiTheme::applyIcon(m_btnRefresh, "refresh", 16);
     m_btnRefresh->setObjectName("btnRefresh");
-    m_btnRefresh->setStyleSheet(
-        "QPushButton#btnRefresh{"
-        "  background:#313244;color:#CDD6F4;border:none;"
-        "  border-radius:4px;padding:6px 12px;font-size:13px;}"
-        "QPushButton#btnRefresh:hover{background:#45475A;}"
-        "QPushButton#btnRefresh:disabled{color:#585b70;}");
     discHeaderLayout->addWidget(discTitle, 1);
     discHeaderLayout->addWidget(m_btnRefresh);
 
@@ -496,18 +300,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
     // ── Add by IP row ─────────────────────────────────────────────────────────
     auto* ipRow = new QWidget();
-    ipRow->setStyleSheet("background:#1E1E2E;border-top:1px solid #313244;");
+    ipRow->setObjectName("ipRow");
     auto* ipLayout = new QHBoxLayout(ipRow);
     ipLayout->setContentsMargins(12,8,12,8);
     ipLayout->setSpacing(6);
     m_ipSearchInput = new QLineEdit(ipRow);
     m_ipSearchInput->setPlaceholderText("Add by IP address…");
-    m_ipSearchInput->setStyleSheet(
-        "QLineEdit{background:#313244;color:#CDD6F4;border:1px solid #45475A;"
-        "border-radius:4px;padding:5px 8px;font-size:12px;}"
-        "QLineEdit:focus{border-color:#CBA6F7;}");
+    m_ipSearchInput->setObjectName("ipSearchInput");
     auto* btnAddIp = new QPushButton("", ipRow);
-    applyIcon(btnAddIp, "send", 16);
+    UiTheme::applyIcon(btnAddIp, "send", 16);
     btnAddIp->setObjectName("addPeerBtn");
     btnAddIp->setFixedSize(28, 28);
     btnAddIp->setToolTip("Connect to this IP address");
@@ -530,26 +331,26 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     auto* chatHeaderLayout = new QHBoxLayout(chatHeader);
     chatHeaderLayout->setContentsMargins(12,10,12,10);
     auto* btnBack = new QPushButton("", chatHeader);
-    applyIcon(btnBack, "back", 20);
+    UiTheme::applyIcon(btnBack, "back", 20);
     btnBack->setFixedSize(34, 34);
     btnBack->setIconSize(QSize(20,20));
-    btnBack->setStyleSheet("background:transparent;color:#A6ADC8;border:none;border-radius:9px;padding:0;");
+    btnBack->setObjectName("headerBackBtn");
     m_chatStatusDot = makeStatusDot(chatHeader);
     m_chatName = new QLabel("", chatHeader);
     m_chatName->setObjectName("chatTitle");
     auto* btnChatVoice = new QPushButton("", chatHeader);
     auto* btnChatVideo = new QPushButton("", chatHeader);
     auto* btnChatScreen = new QPushButton("", chatHeader);
-    applyIcon(btnChatVoice, "call", 22);
-    applyIcon(btnChatVideo, "video", 22);
-    applyIcon(btnChatScreen, "screen", 22);
+    UiTheme::applyIcon(btnChatVoice, "call", 22);
+    UiTheme::applyIcon(btnChatVideo, "video", 22);
+    UiTheme::applyIcon(btnChatScreen, "screen", 22);
     btnChatVoice->setToolTip("Voice call");
     btnChatVideo->setToolTip("Video call");
     btnChatScreen->setToolTip("Share screen");
     for (auto* b : {btnChatVoice, btnChatVideo, btnChatScreen}) {
         b->setFixedSize(36, 36);
         b->setIconSize(QSize(22,22));
-        b->setStyleSheet("background:#26293D;color:#CDD6F4;border:none;border-radius:10px;padding:0;");
+        b->setObjectName("headerActionBtn");
     }
     m_btnChatVoice = btnChatVoice;
     m_btnChatVideo = btnChatVideo;
@@ -572,79 +373,22 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     auto* roBannerLayout = new QHBoxLayout(m_chatReadOnlyBanner);
     roBannerLayout->setContentsMargins(14,8,14,8);
     auto* roIcon = new QLabel(m_chatReadOnlyBanner);
-    roIcon->setPixmap(lcIcon("lock").pixmap(16,16));
+    roIcon->setPixmap(UiTheme::icon("lock").pixmap(16,16));
     roBannerLayout->addWidget(roIcon);
     roBannerLayout->addWidget(new QLabel("This conversation is read-only. You are no longer friends.", m_chatReadOnlyBanner));
     chatLayout->addWidget(m_chatReadOnlyBanner);
     m_chatReadOnlyBanner->setVisible(false);
 
     // Message area
-    m_chatMsgList = new QListWidget();
-    m_chatMsgList->setObjectName("msgArea");
-    m_chatMsgList->setWordWrap(true);
-    m_chatMsgList->setFrameShape(QFrame::NoFrame);
-    m_chatMsgList->setSpacing(2);
-    m_chatMsgList->setUniformItemSizes(false);
-    m_chatMsgList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_chatMsgList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_chatMsgList->setFocusPolicy(Qt::NoFocus);
-    chatLayout->addWidget(m_chatMsgList, 1);
-    
-    // Install resize event filter for responsive message layout
-    auto* chatResizeFilter = new ListWidgetResizeFilter(m_chatMsgList, this);
-    m_chatMsgList->viewport()->installEventFilter(chatResizeFilter);
+    m_chatView = new ChatView(m_panelChat);
+    chatLayout->addWidget(m_chatView, 1);
 
-    // Typing / upload status indicator (hidden by default)
-    m_lblChatStatus = new QLabel("", m_panelChat);
-    m_lblChatStatus->setObjectName("chatStatusLabel");
-    m_lblChatStatus->setVisible(false);
-    chatLayout->addWidget(m_lblChatStatus);
-
-    // Outgoing upload progress bar (hidden by default)
-    m_chatUploadBar = new QProgressBar(m_panelChat);
-    m_chatUploadBar->setObjectName("uploadBar");
-    m_chatUploadBar->setFixedHeight(4);
-    m_chatUploadBar->setRange(0, 100);
-    m_chatUploadBar->setValue(0);
-    m_chatUploadBar->setTextVisible(false);
-    m_chatUploadBar->setVisible(false);
-    chatLayout->addWidget(m_chatUploadBar);
-    m_chatToolbar = new QWidget();
-    m_chatToolbar->setObjectName("chatToolbar");
-    auto* tbLayout = new QHBoxLayout(m_chatToolbar);
-    tbLayout->setContentsMargins(12,4,12,0);
-    tbLayout->setSpacing(4);
-    auto* btnSendImg  = new QPushButton("Image", m_chatToolbar);
-    auto* btnSendFile = new QPushButton("File",  m_chatToolbar);
-    auto* btnVoiceNote = new QPushButton("Record voice", m_chatToolbar);
-    applyIcon(btnSendImg, "image", 16);
-    applyIcon(btnSendFile, "file", 16);
-    applyIcon(btnVoiceNote, "voice", 16);
-    m_lblRecording = new QLabel("Recording…", m_chatToolbar);
-    m_lblRecording->setObjectName("recording");
-    m_lblRecording->setVisible(false);
-    tbLayout->addWidget(btnSendImg);
-    tbLayout->addWidget(btnSendFile);
-    tbLayout->addWidget(btnVoiceNote);
-    tbLayout->addWidget(m_lblRecording);
-    tbLayout->addStretch();
-    chatLayout->addWidget(m_chatToolbar);
-
-    // Input bar
-    m_chatInputBar = new QWidget();
-    m_chatInputBar->setObjectName("inputBar");
-    auto* inputLayout = new QHBoxLayout(m_chatInputBar);
-    inputLayout->setContentsMargins(12,6,12,8);
-    inputLayout->setSpacing(8);
-    m_chatInput = new QLineEdit();
-    m_chatInput->setObjectName("chatInput");
-    m_chatInput->setPlaceholderText("Type a message…");
-    auto* btnSend = new QPushButton("Send", m_chatInputBar);
-    applyIcon(btnSend, "send", 16);
-    btnSend->setObjectName("sendBtn");
-    inputLayout->addWidget(m_chatInput, 1);
-    inputLayout->addWidget(btnSend);
-    chatLayout->addWidget(m_chatInputBar);
+    // Composer — one card holding attach, input, voice and send, plus a
+    // permanently reserved status band, so typing/upload notices and the reply
+    // chip can never shove the message list around.
+    m_chatComposer = new ChatComposer(m_panelChat);
+    m_chatComposer->setPlaceholderText("Type a message…  (Shift+Enter for a new line)");
+    chatLayout->addWidget(m_chatComposer);
 
     m_panels->addWidget(m_panelChat);
 
@@ -667,74 +411,29 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     auto* grpHeaderLayout = new QHBoxLayout(groupHeader);
     grpHeaderLayout->setContentsMargins(12,10,12,10);
     auto* btnGrpBack = new QPushButton("", groupHeader);
-    applyIcon(btnGrpBack, "back", 20);
+    UiTheme::applyIcon(btnGrpBack, "back", 20);
     btnGrpBack->setFixedSize(34, 34);
     btnGrpBack->setIconSize(QSize(20,20));
-    btnGrpBack->setStyleSheet("background:transparent;color:#A6ADC8;border:none;border-radius:9px;padding:0;");
+    btnGrpBack->setObjectName("headerBackBtn");
     m_groupName = new QLabel("", groupHeader);
     m_groupName->setObjectName("groupTitle");
     auto* btnGrpVoice  = new QPushButton("", groupHeader);
-    applyIcon(btnGrpVoice, "call", 22);
+    UiTheme::applyIcon(btnGrpVoice, "call", 22);
     btnGrpVoice->setFixedSize(36, 36);
     btnGrpVoice->setIconSize(QSize(22,22));
-    btnGrpVoice->setStyleSheet("background:#26293D;color:#CDD6F4;border:none;border-radius:10px;padding:0;");
+    btnGrpVoice->setObjectName("headerActionBtn");
     grpHeaderLayout->addWidget(btnGrpBack);
     grpHeaderLayout->addWidget(m_groupName, 1);
     grpHeaderLayout->addWidget(btnGrpVoice);
     grpMainLayout->addWidget(groupHeader);
 
-    m_groupMsgList = new QListWidget();
-    m_groupMsgList->setObjectName("msgArea");
-    m_groupMsgList->setWordWrap(true);
-    m_groupMsgList->setFrameShape(QFrame::NoFrame);
-    m_groupMsgList->setSpacing(2);
-    m_groupMsgList->setUniformItemSizes(false);
-    m_groupMsgList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_groupMsgList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_groupMsgList->setFocusPolicy(Qt::NoFocus);
-    grpMainLayout->addWidget(m_groupMsgList, 1);
-    
-    // Install resize event filter for responsive message layout
-    auto* grpResizeFilter = new ListWidgetResizeFilter(m_groupMsgList, this);
-    m_groupMsgList->viewport()->installEventFilter(grpResizeFilter);
+    m_groupView = new ChatView(grpMain);
+    m_groupView->setShowAvatars(true);      // several speakers; faces help
+    grpMainLayout->addWidget(m_groupView, 1);
 
-    // Group toolbar
-    auto* grpToolbar = new QWidget();
-    grpToolbar->setObjectName("chatToolbar");
-    auto* grpTbLayout = new QHBoxLayout(grpToolbar);
-    grpTbLayout->setContentsMargins(12,4,12,0);
-    grpTbLayout->setSpacing(4);
-    auto* btnGrpSendImg  = new QPushButton("Image", grpToolbar);
-    auto* btnGrpSendFile = new QPushButton("File",  grpToolbar);
-    auto* btnGrpVoiceNote = new QPushButton("Record voice", grpToolbar);
-    applyIcon(btnGrpSendImg, "image", 16);
-    applyIcon(btnGrpSendFile, "file", 16);
-    applyIcon(btnGrpVoiceNote, "voice", 16);
-    m_lblGrpRecording = new QLabel("Recording…", grpToolbar);
-    m_lblGrpRecording->setObjectName("recording");
-    m_lblGrpRecording->setVisible(false);
-    grpTbLayout->addWidget(btnGrpSendImg);
-    grpTbLayout->addWidget(btnGrpSendFile);
-    grpTbLayout->addWidget(btnGrpVoiceNote);
-    grpTbLayout->addWidget(m_lblGrpRecording);
-    grpTbLayout->addStretch();
-    grpMainLayout->addWidget(grpToolbar);
-
-    // Group input bar
-    auto* grpInputBar = new QWidget();
-    grpInputBar->setObjectName("inputBar");
-    auto* grpInputLayout = new QHBoxLayout(grpInputBar);
-    grpInputLayout->setContentsMargins(12,6,12,8);
-    grpInputLayout->setSpacing(8);
-    m_groupInput = new QLineEdit();
-    m_groupInput->setObjectName("groupInput");
-    m_groupInput->setPlaceholderText("Message group…");
-    auto* btnGrpSend = new QPushButton("Send", grpInputBar);
-    applyIcon(btnGrpSend, "send", 16);
-    btnGrpSend->setObjectName("sendBtn");
-    grpInputLayout->addWidget(m_groupInput, 1);
-    grpInputLayout->addWidget(btnGrpSend);
-    grpMainLayout->addWidget(grpInputBar);
+    m_groupComposer = new ChatComposer(grpMain);
+    m_groupComposer->setPlaceholderText("Message group…  (Shift+Enter for a new line)");
+    grpMainLayout->addWidget(m_groupComposer);
 
     grpPanelLayout->addWidget(grpMain, 1);
 
@@ -747,7 +446,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     auto* gmHeader = new QLabel("MEMBERS", grpMembers);
     gmHeader->setObjectName("grpMemberHeader");
     m_grpMemberList = new QListWidget(grpMembers);
-    m_grpMemberList->setStyleSheet("QListWidget{background:transparent;border:none;}QListWidget::item{padding:6px 12px;color:#A6ADC8;font-size:12px;}");
+    m_grpMemberList->setObjectName("grpMemberList");
     gmLayout->addWidget(gmHeader);
     gmLayout->addWidget(m_grpMemberList, 1);
     grpPanelLayout->addWidget(grpMembers);
@@ -778,20 +477,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
         if (isFormer) {
             // Former friend — limited menu: can only view history or permanently delete
-            menu.addAction(lcIcon("chat"), "View History",      this, [this]{ onFriendClicked(m_friendsList->currentItem()); });
+            menu.addAction(UiTheme::icon("chat"), "View History",      this, [this]{ onFriendClicked(m_friendsList->currentItem()); });
             menu.addSeparator();
-            menu.addAction(lcIcon("delete"), "Delete Conversation",this, &MainWindow::onCtxDeleteConversation);
+            menu.addAction(UiTheme::icon("delete"), "Delete Conversation",this, &MainWindow::onCtxDeleteConversation);
             menu.addSeparator();
-            menu.addAction(lcIcon("close"), "Delete from List",   this, &MainWindow::onCtxDeleteFormerFriend);
+            menu.addAction(UiTheme::icon("close"), "Delete from List",   this, &MainWindow::onCtxDeleteFormerFriend);
         } else {
             // Active friend — full menu
-            menu.addAction(lcIcon("chat"), "Open Chat",          this, [this]{ onFriendClicked(m_friendsList->currentItem()); });
-            menu.addAction(lcIcon("call"), "Voice Call",         this, &MainWindow::onCtxVoiceCall);
-            menu.addAction(lcIcon("video"), "Video Call",         this, &MainWindow::onCtxVideoCall);
+            menu.addAction(UiTheme::icon("chat"), "Open Chat",          this, [this]{ onFriendClicked(m_friendsList->currentItem()); });
+            menu.addAction(UiTheme::icon("call"), "Voice Call",         this, &MainWindow::onCtxVoiceCall);
+            menu.addAction(UiTheme::icon("video"), "Video Call",         this, &MainWindow::onCtxVideoCall);
             menu.addSeparator();
-            menu.addAction(lcIcon("delete"), "Delete Conversation",this, &MainWindow::onCtxDeleteConversation);
+            menu.addAction(UiTheme::icon("delete"), "Delete Conversation",this, &MainWindow::onCtxDeleteConversation);
             menu.addSeparator();
-            menu.addAction(lcIcon("close"), "Remove Friend",       this, &MainWindow::onCtxRemoveFriend);
+            menu.addAction(UiTheme::icon("close"), "Remove Friend",       this, &MainWindow::onCtxRemoveFriend);
         }
         menu.exec(m_friendsList->mapToGlobal(p));
     });
@@ -801,115 +500,64 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         m_groupsList->setCurrentItem(item);
         QMenu menu;
         
-        menu.addAction(lcIcon("chat"), "Open Group Chat",    this, [this]{ onGroupClicked(m_groupsList->currentItem()); });
-        menu.addAction(lcIcon("call"), "Group Call",         this, [this]{ onGroupVoiceCall(); });
+        menu.addAction(UiTheme::icon("chat"), "Open Group Chat",    this, [this]{ onGroupClicked(m_groupsList->currentItem()); });
+        menu.addAction(UiTheme::icon("call"), "Group Call",         this, [this]{ onGroupVoiceCall(); });
         menu.addSeparator();
-        menu.addAction(lcIcon("delete"), "Delete Conversation",this, &MainWindow::onCtxDeleteConversation);
+        menu.addAction(UiTheme::icon("delete"), "Delete Conversation",this, &MainWindow::onCtxDeleteConversation);
         menu.addSeparator();
-        menu.addAction(lcIcon("settings"), "Manage Group",       this, &MainWindow::onCtxManageGroup);
-        auto* leaveAct = menu.addAction(lcIcon("close"), "Leave Group", this, &MainWindow::onCtxLeaveGroup);
+        menu.addAction(UiTheme::icon("settings"), "Manage Group",       this, &MainWindow::onCtxManageGroup);
+        auto* leaveAct = menu.addAction(UiTheme::icon("close"), "Leave Group", this, &MainWindow::onCtxLeaveGroup);
         menu.exec(m_groupsList->mapToGlobal(p));
     });
 
     // ── Message right-click: Copy / Reply / Forward / Delete ────────────────
-    m_chatMsgList->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_chatMsgList, &QListWidget::customContextMenuRequested, this, [this](const QPoint& p){
-        auto* item = m_chatMsgList->itemAt(p);
-        if (!item) return;
-        m_chatMsgList->setCurrentItem(item);
-        QMenu menu;
-        menu.addAction(lcIcon("copy"), "Copy Message", this, [this](){
-            auto sel = m_chatMsgList->selectedItems();
-            if (sel.isEmpty()) return;
-            QString text;
-            if (auto* w = m_chatMsgList->itemWidget(sel.first())) {
-                const auto labels = w->findChildren<QLabel*>("msgText");
-                if (!labels.isEmpty()) text = labels.first()->text();
-            }
-            if (text.isEmpty()) text = sel.first()->text();
-            QGuiApplication::clipboard()->setText(text);
+    // Message text is rich text now (URLs are clickable), so the plain string
+    // comes off the bubble instead of out of the label.
+    auto installMsgMenu = [this](ChatView* view, ChatComposer* composer) {
+        view->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(view, &QListWidget::customContextMenuRequested, this,
+                [this, view, composer](const QPoint& p) {
+            QListWidgetItem* item = view->itemAt(p);
+            if (!item) return;
+            if (!item->isSelected()) view->setCurrentItem(item);
+
+            ChatBubble* bubble = view->firstSelectedBubble();
+            const QString text = bubble ? bubble->plainText() : QString();
+
+            QMenu menu;
+            auto* copyAct = menu.addAction(UiTheme::icon("copy"), "Copy Message", this, [text]() {
+                QGuiApplication::clipboard()->setText(text);
+            });
+            copyAct->setEnabled(!text.isEmpty());
+            menu.addAction(UiTheme::icon("back"), "Reply", this, [bubble, composer]() {
+                if (bubble) composer->setReplyTarget(bubble->timestamp(),
+                                                     bubble->senderName(),
+                                                     bubble->plainText());
+            });
+            auto* fwdAct = menu.addAction(UiTheme::icon("send"), "Forward", this,
+                                          [text, composer]() { composer->setText(text); });
+            fwdAct->setEnabled(!text.isEmpty());
+            menu.addSeparator();
+            menu.addAction(UiTheme::icon("delete"), "Delete Message",
+                           this, &MainWindow::onCtxDeleteMessages);
+            menu.exec(view->mapToGlobal(p));
         });
-        menu.addAction("↩ Reply", this, [this](){
-            auto sel = m_chatMsgList->selectedItems();
-            if (sel.isEmpty() || !m_chatInput) return;
-            QString text;
-            if (auto* w = m_chatMsgList->itemWidget(sel.first())) {
-                const auto labels = w->findChildren<QLabel*>("msgText");
-                if (!labels.isEmpty()) text = labels.first()->text();
-            }
-            if (text.isEmpty()) text = sel.first()->text();
-            if (text.length() > 40) text = text.left(40) + QStringLiteral("…");
-            m_chatInput->setFocus();
-            m_chatInput->setText("▸ " + text + "  ");
-        });
-        menu.addAction("↗ Forward", this, [this](){
-            auto sel = m_chatMsgList->selectedItems();
-            if (sel.isEmpty()) return;
-            QString text;
-            if (auto* w = m_chatMsgList->itemWidget(sel.first())) {
-                const auto labels = w->findChildren<QLabel*>("msgText");
-                if (!labels.isEmpty()) text = labels.first()->text();
-            }
-            if (text.isEmpty()) text = sel.first()->text();
-            if (m_chatInput) { m_chatInput->setText(text); m_chatInput->setFocus(); }
-        });
-        menu.addSeparator();
-        menu.addAction(lcIcon("delete"), "Delete Message", this, &MainWindow::onCtxDeleteMessages);
-        menu.exec(m_chatMsgList->mapToGlobal(p));
-    });
-    m_groupMsgList->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_groupMsgList, &QListWidget::customContextMenuRequested, this, [this](const QPoint& p){
-        auto* item = m_groupMsgList->itemAt(p);
-        if (!item) return;
-        m_groupMsgList->setCurrentItem(item);
-        QMenu menu;
-        menu.addAction(lcIcon("copy"), "Copy Message", this, [this](){
-            auto sel = m_groupMsgList->selectedItems();
-            if (sel.isEmpty()) return;
-            QString text;
-            if (auto* w = m_groupMsgList->itemWidget(sel.first())) {
-                const auto labels = w->findChildren<QLabel*>("msgText");
-                if (!labels.isEmpty()) text = labels.first()->text();
-            }
-            if (text.isEmpty()) text = sel.first()->text();
-            QGuiApplication::clipboard()->setText(text);
-        });
-        menu.addAction("↩ Reply", this, [this](){
-            auto sel = m_groupMsgList->selectedItems();
-            if (sel.isEmpty() || !m_groupInput) return;
-            QString text;
-            if (auto* w = m_groupMsgList->itemWidget(sel.first())) {
-                const auto labels = w->findChildren<QLabel*>("msgText");
-                if (!labels.isEmpty()) text = labels.first()->text();
-            }
-            if (text.isEmpty()) text = sel.first()->text();
-            if (text.length() > 40) text = text.left(40) + QStringLiteral("…");
-            m_groupInput->setFocus();
-            m_groupInput->setText("▸ " + text + "  ");
-        });
-        menu.addAction("↗ Forward", this, [this](){
-            auto sel = m_groupMsgList->selectedItems();
-            if (sel.isEmpty()) return;
-            QString text;
-            if (auto* w = m_groupMsgList->itemWidget(sel.first())) {
-                const auto labels = w->findChildren<QLabel*>("msgText");
-                if (!labels.isEmpty()) text = labels.first()->text();
-            }
-            if (text.isEmpty()) text = sel.first()->text();
-            if (m_groupInput) { m_groupInput->setText(text); m_groupInput->setFocus(); }
-        });
-        menu.addSeparator();
-        menu.addAction(lcIcon("delete"), "Delete Message", this, &MainWindow::onCtxDeleteMessages);
-        menu.exec(m_groupMsgList->mapToGlobal(p));
-    });
+    };
+    installMsgMenu(m_chatView,  m_chatComposer);
+    installMsgMenu(m_groupView, m_groupComposer);
 
     connect(btnBack,    &QPushButton::clicked, this, &MainWindow::onDiscoverClicked);
     connect(btnGrpBack, &QPushButton::clicked, this, &MainWindow::onDiscoverClicked);
-    connect(btnSend,    &QPushButton::clicked, this, &MainWindow::onChatSend);
-    connect(m_chatInput, &QLineEdit::returnPressed, this, &MainWindow::onChatSend);
-    connect(m_chatInput, &QLineEdit::textChanged, this, [this](const QString& txt) {
-        if (!m_activeFriend || txt.isEmpty()) return;
-        // Send typing signal (debounced — only if not already sent recently)
+
+    // ── Chat composer ───────────────────────────────────────────────────────
+    connect(m_chatComposer, &ChatComposer::sendRequested, this, &MainWindow::sendChatText);
+    connect(m_chatComposer, &ChatComposer::attachRequested, this, [this](bool imagesOnly) {
+        if (imagesOnly) onChatSendImage();
+        else            onChatSendFile();
+    });
+    connect(m_chatComposer, &ChatComposer::typing, this, [this]() {
+        if (!m_activeFriend) return;
+        // Debounced — one Typing signal per burst, not one per keystroke.
         if (m_typingDebounce && !m_typingDebounce->isActive()) {
             SigMsg sig = buildSig(SigType::Typing);
             sig.target_id = m_activeFriend->id;
@@ -917,71 +565,62 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         }
         if (m_typingDebounce) m_typingDebounce->start();
     });
-    connect(btnSendImg,  &QPushButton::clicked, this, &MainWindow::onChatSendImage);
-    connect(btnSendFile, &QPushButton::clicked, this, &MainWindow::onChatSendFile);
-    connect(btnChatVoice, &QPushButton::clicked, this, &MainWindow::onChatVoiceCall);
-    connect(btnChatVideo, &QPushButton::clicked, this, &MainWindow::onChatVideoCall);
+    connect(m_chatView, &ChatView::replyRequested, this,
+            [this](int64_t ts, const QString& name, const QString& snippet) {
+        m_chatComposer->setReplyTarget(ts, name, snippet);
+    });
+    connect(m_chatView, &ChatView::deleteRequested, this, &MainWindow::onCtxDeleteMessages);
+
+    connect(btnChatVoice,  &QPushButton::clicked, this, &MainWindow::onChatVoiceCall);
+    connect(btnChatVideo,  &QPushButton::clicked, this, &MainWindow::onChatVideoCall);
     connect(btnChatScreen, &QPushButton::clicked, this, [this]() {
         if (m_activeFriend) sendCallInvite(m_activeFriend, "screen");
     });
 
-    connect(btnGrpSend, &QPushButton::clicked, this, &MainWindow::onGroupSend);
-    connect(m_groupInput, &QLineEdit::returnPressed, this, &MainWindow::onGroupSend);
-    connect(btnGrpSendImg,  &QPushButton::clicked, this, &MainWindow::onGroupSendImage);
-    connect(btnGrpSendFile, &QPushButton::clicked, this, &MainWindow::onGroupSendFile);
-    connect(btnGrpVoice,    &QPushButton::clicked, this, &MainWindow::onGroupVoiceCall);
-    connect(btnNewGrp,      &QPushButton::clicked, this, &MainWindow::onNewGroup);
+    // ── Group composer ──────────────────────────────────────────────────────
+    connect(m_groupComposer, &ChatComposer::sendRequested, this, &MainWindow::sendGroupText);
+    connect(m_groupComposer, &ChatComposer::attachRequested, this, [this](bool imagesOnly) {
+        if (imagesOnly) onGroupSendImage();
+        else            onGroupSendFile();
+    });
+    connect(m_groupView, &ChatView::replyRequested, this,
+            [this](int64_t ts, const QString& name, const QString& snippet) {
+        m_groupComposer->setReplyTarget(ts, name, snippet);
+    });
+    connect(m_groupView, &ChatView::deleteRequested, this, &MainWindow::onCtxDeleteMessages);
+    connect(btnGrpVoice, &QPushButton::clicked, this, &MainWindow::onGroupVoiceCall);
+    connect(btnNewGrp,   &QPushButton::clicked, this, &MainWindow::onNewGroup);
 
-    // Voice note buttons — click once to start, click again to stop and send.
-    // This is more reliable than press-and-hold on Windows touchpads/remotes,
-    // where the release event can be swallowed when the cursor leaves the button.
-    btnVoiceNote->setCheckable(true);
+    // Voice notes — click to start, click again to stop and send. That beats
+    // press-and-hold on Windows touchpads, where the release event can be
+    // swallowed when the cursor leaves the button.
 #ifdef HAS_MULTIMEDIA
-    connect(btnVoiceNote, &QPushButton::clicked, this, [this, btnVoiceNote](bool checked) {
-        if (checked) {
+    connect(m_chatComposer, &ChatComposer::voiceRecordToggled, this, [this](bool on) {
+        if (on) {
             onVoiceNotePress();
-            if (m_vnRec && m_vnRec->isRecording()) {
-                btnVoiceNote->setText("Stop and send");
-                applyIcon(btnVoiceNote, "stop", 16);
-            } else {
-                btnVoiceNote->setChecked(false);
-                btnVoiceNote->setText("Record voice");
-                applyIcon(btnVoiceNote, "voice", 16);
-            }
+            m_chatComposer->setRecording(m_vnRec && m_vnRec->isRecording());
         } else {
+            m_chatComposer->setRecording(false);
             onVoiceNoteRelease();
-            btnVoiceNote->setText("Record voice");
-            applyIcon(btnVoiceNote, "voice", 16);
         }
     });
-#else
-    btnVoiceNote->setEnabled(false);
-    btnVoiceNote->setText("Voice unavailable");
-    applyIcon(btnVoiceNote, "voice", 16);
-#endif
-    btnGrpVoiceNote->setCheckable(true);
-#ifdef HAS_MULTIMEDIA
-    connect(btnGrpVoiceNote, &QPushButton::clicked, this, [this, btnGrpVoiceNote](bool checked) {
-        if (checked) {
+    connect(m_chatComposer, &ChatComposer::voiceRecordCancelled,
+            this, &MainWindow::onVoiceNoteCancel);
+
+    connect(m_groupComposer, &ChatComposer::voiceRecordToggled, this, [this](bool on) {
+        if (on) {
             onGroupVoiceNotePress();
-            if (m_vnRecGroup && m_vnRecGroup->isRecording()) {
-                btnGrpVoiceNote->setText("Stop and send");
-                applyIcon(btnGrpVoiceNote, "stop", 16);
-            } else {
-                btnGrpVoiceNote->setChecked(false);
-                btnGrpVoiceNote->setText("Record voice");
-                applyIcon(btnGrpVoiceNote, "voice", 16);
-            }
+            m_groupComposer->setRecording(m_vnRecGroup && m_vnRecGroup->isRecording());
         } else {
+            m_groupComposer->setRecording(false);
             onGroupVoiceNoteRelease();
-            btnGrpVoiceNote->setText("Record voice");
-            applyIcon(btnGrpVoiceNote, "voice", 16);
         }
     });
+    connect(m_groupComposer, &ChatComposer::voiceRecordCancelled,
+            this, &MainWindow::onGroupVoiceNoteCancel);
 #else
-    btnGrpVoiceNote->setEnabled(false);
-    btnGrpVoiceNote->setText("Voice unavailable");
-    applyIcon(btnGrpVoiceNote, "voice", 16);
+    m_chatComposer ->setVoiceEnabled(false, "Voice notes need Qt Multimedia");
+    m_groupComposer->setVoiceEnabled(false, "Voice notes need Qt Multimedia");
 #endif
 
     // ── Start services (deferred — lets the window paint its first frame first)
@@ -1008,22 +647,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         m_typingDebounce->setInterval(2000);
         m_typingDebounce->setSingleShot(true);
 
-        // Auto-hide "is typing" label after 4 s of no new typing signal
+        // Auto-hide the "is typing" ghost after 4 s of no new typing signal
         m_typingHideTimer = new QTimer(this);
         m_typingHideTimer->setInterval(4000);
         m_typingHideTimer->setSingleShot(true);
         connect(m_typingHideTimer, &QTimer::timeout, this, [this]() {
-            if (m_lblChatStatus && m_lblChatStatus->text().contains("typing"))
-                m_lblChatStatus->setVisible(false);
+            if (m_chatView) m_chatView->setTypingIndicator(false);
         });
 
-        // Auto-hide "is uploading" label after 30 s (fallback if upload_end missed)
+        // Auto-hide "is uploading" after 30 s (fallback if upload_end is missed)
         m_uploadHideTimer = new QTimer(this);
         m_uploadHideTimer->setInterval(30000);
         m_uploadHideTimer->setSingleShot(true);
         connect(m_uploadHideTimer, &QTimer::timeout, this, [this]() {
-            if (m_lblChatStatus && m_lblChatStatus->text().contains("uploading"))
-                m_lblChatStatus->setVisible(false);
+            if (m_chatComposer) m_chatComposer->setStatusText(QString());
         });
         // covers both runtime changes (incoming request) and the deferred load().
         connect(m_friendMgr, &FriendManager::pendingChanged, this, [this](){
@@ -1081,7 +718,7 @@ void MainWindow::closeEvent(QCloseEvent* e)
     // Stop services first so no new work is queued
     if (m_discovery) m_discovery->stop();
     if (m_sigServer)  m_sigServer->stop();
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#ifdef HAS_MEDIA_AUDIO
     if (m_callWin)    m_callWin->doClose();
 #endif
 

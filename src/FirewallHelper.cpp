@@ -96,20 +96,15 @@ static void addRules()
 {
     QString bp = QString::number(MediaSettings::BroadcastPort);
     QString sp = QString::number(MediaSettings::SignalingPort);
-    QString ap = QString::number(MediaSettings::MediaAudioPort);
-    QString vp = QString::number(MediaSettings::MediaVideoPort);
+    QString mp = QString::number(MediaSettings::MediaUdpPort);
     QString tp = QString::number(MediaSettings::MediaTcpPort);
 
-    // Legacy fixed-port rules are kept for broadcast/signaling and for fallback
-    // UDP media builds.
     rm(appName() + " UDP");      add(appName() + " UDP",      "UDP", "in",  bp);
     rm(appName() + " UDP Out");  add(appName() + " UDP Out",  "UDP", "out", bp);
     rm(appName() + " TCP");      add(appName() + " TCP",      "TCP", "in",  sp);
     rm(appName() + " TCP Out");  add(appName() + " TCP Out",  "TCP", "out", sp);
-    rm(appName() + " Audio In"); add(appName() + " Audio In", "UDP", "in",  ap);
-    rm(appName() + " Audio Out");add(appName() + " Audio Out","UDP", "out", ap);
-    rm(appName() + " Video In"); add(appName() + " Video In", "UDP", "in",  vp);
-    rm(appName() + " Video Out");add(appName() + " Video Out","UDP", "out", vp);
+    rm(appName() + " Media In"); add(appName() + " Media In", "UDP", "in",  mp);
+    rm(appName() + " Media Out");add(appName() + " Media Out","UDP", "out", mp);
     rm(appName() + " Media TCP In"); add(appName() + " Media TCP In", "TCP", "in",  tp);
     rm(appName() + " Media TCP Out");add(appName() + " Media TCP Out","TCP", "out", tp);
 

@@ -314,14 +314,20 @@ set(LOCALCALL_SOURCES
     src/GroupManageDialog.cpp
     src/MainWindow.cpp
     src/MainWindow_logic.cpp
+    src/ChatBubble.cpp
+    src/ChatView.cpp
+    src/ChatComposer.cpp
     src/UiTheme.cpp
     resources/resources.qrc
 )
 
 set(LOCALCALL_HEADERS
     include/CallTypes.h
+    include/ChatBubble.h
+    include/ChatComposer.h
     include/ChatMessage.h
     include/ChatStore.h
+    include/ChatView.h
     include/FirewallHelper.h
     include/SecurityManager.h
     include/FriendInfo.h

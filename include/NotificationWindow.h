@@ -11,7 +11,14 @@ class QTimer;
 class NotificationWindow : public QDialog {
     Q_OBJECT
 public:
-    struct Button { QString label; std::function<void()> action; };
+    /// Accept/Reject buttons are tinted by the theme; Neutral keeps the
+    /// default grey. Existing two-element brace initialisers stay valid.
+    struct Button {
+        enum Kind { Neutral, Accept, Reject };
+        QString               label;
+        std::function<void()> action;
+        Kind                  kind{Neutral};
+    };
 
     // With buttons (persistent until dismissed)
     explicit NotificationWindow(const QString& title, const QString& body,

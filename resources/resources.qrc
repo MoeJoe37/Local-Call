@@ -29,4 +29,7 @@
     <file alias="video.png">icons/video.png</file>
     <file alias="voice.png">icons/voice.png</file>
   </qresource>
+  <qresource prefix="/theme">
+    <file alias="localcall.qss">theme/localcall.qss</file>
+  </qresource>
 </RCC>

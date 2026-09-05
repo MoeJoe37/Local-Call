@@ -29,44 +29,19 @@ void NotificationWindow::build(const QString& title, const QString& body,
     setAttribute(Qt::WA_DeleteOnClose);
     setModal(false);
 
-    // Styling
-    setStyleSheet(R"(
-        QDialog {
-            background: #1E1E2E;
-            border: 1px solid #44475A;
-            border-radius: 8px;
-        }
-        QLabel#title {
-            color: #CDD6F4;
-            font-size: 13px;
-            font-weight: bold;
-        }
-        QLabel#body {
-            color: #A6ADC8;
-            font-size: 12px;
-        }
-        QPushButton {
-            background: #313244;
-            color: #CDD6F4;
-            border: none;
-            border-radius: 4px;
-            padding: 6px 14px;
-            font-size: 12px;
-            min-width: 64px;
-        }
-        QPushButton:hover { background: #45475A; }
-    )");
+    // Look comes from resources/theme/localcall.qss.
+    setObjectName("notifCard");
 
     auto* root   = new QVBoxLayout(this);
     root->setContentsMargins(16, 12, 16, 12);
     root->setSpacing(6);
 
     auto* lTitle = new QLabel(title, this);
-    lTitle->setObjectName("title");
+    lTitle->setObjectName("notifTitle");
     root->addWidget(lTitle);
 
     auto* lBody = new QLabel(body, this);
-    lBody->setObjectName("body");
+    lBody->setObjectName("notifBody");
     lBody->setWordWrap(true);
     root->addWidget(lBody);
 
@@ -75,6 +50,9 @@ void NotificationWindow::build(const QString& title, const QString& body,
         row->addStretch();
         for (const auto& btn : buttons) {
             auto* pb = new QPushButton(btn.label, this);
+            pb->setObjectName(btn.kind == Button::Accept ? "notifAccept"
+                            : btn.kind == Button::Reject ? "notifReject"
+                                                         : "notifBtn");
             auto  fn = btn.action;
             connect(pb, &QPushButton::clicked, this, [this, fn]() {
                 if (fn) fn();

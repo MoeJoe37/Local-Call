@@ -18,29 +18,7 @@ GroupCreateDialog::GroupCreateDialog(const QList<FriendInfo*>& onlineFriends, QW
     setModal(true);
     setMinimumWidth(340);
 
-    setStyleSheet(R"(
-        QDialog    { background: #1E1E2E; }
-        QLabel     { color: #CDD6F4; font-size: 13px; }
-        QLineEdit  {
-            background: #313244; color: #CDD6F4; border: 1px solid #45475A;
-            border-radius: 4px; padding: 6px 10px; font-size: 13px;
-        }
-        QLineEdit:focus { border-color: #CBA6F7; }
-        QListWidget {
-            background: #181825; color: #CDD6F4; border: 1px solid #313244;
-            border-radius: 4px; font-size: 13px;
-        }
-        QListWidget::item { padding: 6px 8px; }
-        QListWidget::item:hover { background: #313244; }
-        QListWidget::item:selected { background: #45475A; }
-        QPushButton {
-            background: #CBA6F7; color: #11111B; border: none;
-            border-radius: 4px; padding: 7px 20px; font-size: 13px;
-        }
-        QPushButton:hover { background: #B4BEFE; }
-        QPushButton#cancel { background: #313244; color: #CDD6F4; }
-        QPushButton#cancel:hover { background: #45475A; }
-    )");
+    setObjectName("groupCreateDialog");   // styled in localcall.qss
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(20, 18, 20, 18);

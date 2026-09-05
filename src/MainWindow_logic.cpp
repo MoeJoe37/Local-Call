@@ -16,11 +16,15 @@ using json = nlohmann::json;
 #include <QTemporaryDir>
 #include <QUuid>
 #include "Helpers.h"
+#include "UiTheme.h"
 #include "SignalingClient.h"
 #include "NotificationWindow.h"
 #include "InputDialog.h"
 #include "GroupCreateDialog.h"
 #include "GroupManageDialog.h"
+#include "ChatView.h"
+#include "ChatBubble.h"
+#include "ChatComposer.h"
 #include <QListWidgetItem>
 #include <QLabel>
 #include <QTextEdit>
@@ -49,80 +53,11 @@ using json = nlohmann::json;
 
 // Forward declaration
 static QString buildConvKey(const QString& a, const QString& b);
-static QIcon lcIcon(const QString& name) { return QIcon(QStringLiteral(":/icons/") + name + QStringLiteral(".png")); }
 
 #include <QPixmap>
 #include <QBuffer>
 #include <QEvent>
 #include <algorithm>
-
-// ──────────────────────────────────────────────────────────────────────────
-// Implementation of ListWidgetResizeFilter event filter
-// ──────────────────────────────────────────────────────────────────────────
-bool ListWidgetResizeFilter::eventFilter(QObject* obj, QEvent* event) {
-    if (obj == m_list->viewport() && event->type() == QEvent::Resize) {
-        recalculateMessageLayout();
-    }
-    return QObject::eventFilter(obj, event);
-}
-
-void ListWidgetResizeFilter::recalculateMessageLayout() {
-    const int viewW = m_list->viewport()->width();
-    const int outerW = viewW - 4;
-    
-    // Iterate through all items and update their widths
-    for (int i = 0; i < m_list->count(); ++i) {
-        QListWidgetItem* item = m_list->item(i);
-        QWidget* itemWidget = m_list->itemWidget(item);
-        
-        if (!itemWidget) continue;
-        
-        // Update outer widget width
-        itemWidget->setFixedWidth(outerW);
-        
-        // Try to find and update the bubble widget inside
-        // The structure is: outer (QHBoxLayout) -> bubble (QWidget)
-        if (QHBoxLayout* layout = qobject_cast<QHBoxLayout*>(itemWidget->layout())) {
-            for (int j = 0; j < layout->count(); ++j) {
-                QWidget* bubble = layout->itemAt(j)->widget();
-                if (bubble && (bubble->objectName() == "bubbleMine" || 
-                               bubble->objectName() == "bubbleTheirs")) {
-                    // Keep compact message bubbles compact. Older builds
-                    // expanded every bubble to the maximum width on resize,
-                    // which made the chat look like blocks instead of messages.
-                    const int maxBubbleW = qMax(96, qMin(outerW - 32, 560));
-                    const int newBubbleW = qBound(96, bubble->width(), maxBubbleW);
-                    bubble->setFixedWidth(newBubbleW);
-
-                    // Update text edit widths within the bubble
-                    updateBubbleTextWidth(bubble, newBubbleW);
-                    item->setSizeHint(QSize(outerW, itemWidget->sizeHint().height() + 8));
-                }
-            }
-        }
-    }
-}
-
-void ListWidgetResizeFilter::updateBubbleTextWidth(QWidget* bubble, int bubbleW) {
-    if (!bubble) return;
-    
-    // Find message text widgets within bubble and update their width.
-    const int textW = bubbleW - 24;  // padding
-    for (QObject* obj : bubble->children()) {
-        if (QLabel* textLabel = qobject_cast<QLabel*>(obj)) {
-            if (textLabel->objectName() == QLatin1String("msgText")) {
-                textLabel->setFixedWidth(textW);
-                textLabel->adjustSize();
-            }
-        } else if (QTextEdit* textEdit = qobject_cast<QTextEdit*>(obj)) {
-            textEdit->setFixedWidth(textW);
-            int contentHeight = (int)textEdit->document()->size().height();
-            textEdit->setFixedHeight(qMax(24, contentHeight));
-        }
-    }
-}
-
-// ──────────────────────────────────────────────────────────────────────────
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  PANEL SWITCHING
@@ -148,21 +83,21 @@ void MainWindow::showChat(FriendInfo* f)
     QString key = buildConvKey(m_myId, QString::fromStdString(f->id));
     if (m_chatConvKey != key) {
         m_chatConvKey = key;
-        m_chatMsgList->clear();
+        m_chatView->clearMessages();
         auto history = m_chatStore->load(key);
-        for (const auto& msg : history) appendChatMsg(msg, msg.isMine);
-        scrollChatToBottom();
+        for (const auto& msg : history) m_chatView->appendMessage(msg);
+        m_chatView->scrollToLatest();
     }
 
     m_chatName->setText(QString::fromStdString(f->name));
     refreshActiveChatPing();
-    m_chatStatusDot->setStyleSheet(
-        f->isOnline ? "background:#03DAC6;border-radius:5px;min-width:10px;min-height:10px;max-width:10px;max-height:10px;"
-                    : "background:#555555;border-radius:5px;min-width:10px;min-height:10px;max-width:10px;max-height:10px;");
+    UiTheme::setClass(m_chatStatusDot, f->isOnline ? "on" : "off");
 
     // Reset status indicators for the new conversation
-    if (m_lblChatStatus)  { m_lblChatStatus->setVisible(false); }
-    if (m_chatUploadBar)  { m_chatUploadBar->setVisible(false); m_chatUploadBar->setValue(0); }
+    m_chatView->setTypingIndicator(false);
+    m_chatComposer->setStatusText(QString());
+    m_chatComposer->setProgress(-1);
+    m_chatComposer->clearReply();
     if (m_typingHideTimer)  m_typingHideTimer->stop();
     if (m_uploadHideTimer)  m_uploadHideTimer->stop();
 
@@ -172,15 +107,14 @@ void MainWindow::showChat(FriendInfo* f)
     setChatReadOnly(isFormer);
 
     m_panels->setCurrentWidget(m_panelChat);
-    if (!isFormer) m_chatInput->setFocus();
-    scrollChatToBottom();
+    if (!isFormer) m_chatComposer->focusInput();
+    m_chatView->scrollToLatest();
 }
 
 void MainWindow::setChatReadOnly(bool ro)
 {
     m_chatReadOnlyBanner->setVisible(ro);
-    m_chatToolbar->setVisible(!ro);
-    m_chatInputBar->setVisible(!ro);
+    m_chatComposer->setReadOnly(ro);
     m_btnChatVoice->setEnabled(!ro);
     m_btnChatVideo->setEnabled(!ro);
     if (m_btnChatScreen) m_btnChatScreen->setEnabled(!ro);
@@ -194,11 +128,12 @@ void MainWindow::showGroupChat(GroupInfo* g)
     QString key = QString("grp-%1").arg(QString::fromStdString(g->groupId));
     if (m_groupConvKey != key) {
         m_groupConvKey = key;
-        m_groupMsgList->clear();
+        m_groupView->clearMessages();
+        m_groupComposer->clearReply();
         syncGroupMembers(g);
         auto history = m_chatStore->load(key);
-        for (const auto& msg : history) appendGroupMsg(msg, msg.isMine);
-        scrollGroupChatToBottom();
+        for (const auto& msg : history) m_groupView->appendMessage(msg);
+        m_groupView->scrollToLatest();
     }
 
     m_groupName->setText(QString::fromStdString(g->name));
@@ -208,8 +143,8 @@ void MainWindow::showGroupChat(GroupInfo* g)
         m_grpMemberList->addItem(QString::fromStdString(mem->name));
 
     m_panels->setCurrentWidget(m_panelGroup);
-    m_groupInput->setFocus();
-    scrollGroupChatToBottom();
+    m_groupComposer->focusInput();
+    m_groupView->scrollToLatest();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -282,9 +217,7 @@ void MainWindow::updateFriendOnlineStatus(const QMap<QString, PeerInfo>& peers)
 
     if (m_activeFriend) {
         bool on = m_activeFriend->isOnline;
-        m_chatStatusDot->setStyleSheet(
-            on ? "background:#03DAC6;border-radius:5px;min-width:10px;min-height:10px;max-width:10px;max-height:10px;"
-               : "background:#555555;border-radius:5px;min-width:10px;min-height:10px;max-width:10px;max-height:10px;");
+        UiTheme::setClass(m_chatStatusDot, on ? "on" : "off");
         refreshActiveChatPing();
     }
 }
@@ -336,10 +269,11 @@ void MainWindow::rebuildPeersList()
 
         auto* dot = new QLabel(w);
         dot->setFixedSize(10, 10);
-        dot->setStyleSheet("background:#A6E3A1;border-radius:5px;");
+        dot->setObjectName("statusDot");
+        UiTheme::setClass(dot, "on");
 
         auto* lblName = new QLabel(name, w);
-        lblName->setStyleSheet("color:#CDD6F4;font-size:13px;font-weight:500;");
+        lblName->setObjectName("peerName");
         lblName->setMinimumWidth(0);
         // Show IP on hover — keeps the row uncluttered
         w->setToolTip(name + "  —  " + ip);
@@ -347,12 +281,7 @@ void MainWindow::rebuildPeersList()
         auto* btnAdd = new QPushButton("+", w);
         btnAdd->setFixedSize(30, 30);
         btnAdd->setToolTip("Send friend request to " + name);
-        btnAdd->setStyleSheet(
-            "QPushButton{"
-            "  background:#CBA6F7;color:#1E1E2E;border:none;"
-            "  border-radius:15px;font-size:18px;font-weight:bold;}"
-            "QPushButton:hover{background:#B4BEFE;}"
-            "QPushButton:disabled{background:#45475A;color:#6C7086;}");
+        btnAdd->setObjectName("btnAddPeer");
 
         wl->addWidget(dot);
         wl->addWidget(lblName, 1);
@@ -373,7 +302,7 @@ void MainWindow::rebuildPeersList()
             m_sentReqIds.insert(id);
             btnAdd->setEnabled(false);
             btnAdd->setText("");
-            btnAdd->setIcon(lcIcon("check"));
+            btnAdd->setIcon(UiTheme::icon("check"));
             btnAdd->setIconSize(QSize(16,16));
 
             SigMsg sig = buildSig(SigType::FriendReq);
@@ -535,7 +464,7 @@ void MainWindow::onSignalReceived(SigMsg msg, QString ip)
         showToast("Declined", QString::fromStdString(msg.from_name) + " declined the call.");
     }
     else if (t == SigType::CallEnd)    {
-#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#ifdef HAS_MEDIA_AUDIO
         if (m_callWin) { m_callWin->doClose(); m_callWin = nullptr; }
 #endif
     }
@@ -543,7 +472,7 @@ void MainWindow::onSignalReceived(SigMsg msg, QString ip)
     // teardown (ScreenEnd). C# version sends these; we accept gracefully.
     else if (t == SigType::ScreenInv)  handleCallInv(msg, ip);
     else if (t == SigType::ScreenEnd)  {
-#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#ifdef HAS_MEDIA_AUDIO
         if (m_callWin) { m_callWin->doClose(); m_callWin = nullptr; }
 #endif
     }
@@ -562,7 +491,7 @@ void MainWindow::onSignalReceived(SigMsg msg, QString ip)
     else if (t == SigType::GrpCallAcc) handleCallAcc(msg, ip);
     else if (t == SigType::GrpCallRej) showToast("Declined", QString::fromStdString(msg.from_name) + " declined the group call.");
     else if (t == SigType::GrpCallEnd) {
-#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#ifdef HAS_MEDIA_AUDIO
         if (m_callWin) { m_callWin->doClose(); m_callWin = nullptr; }
 #endif
     }
@@ -575,8 +504,8 @@ void MainWindow::onSignalReceived(SigMsg msg, QString ip)
         // Only show if this person's chat is currently open
         if (m_activeFriend && m_activeFriend->id == msg.from_id) {
             QString name = QString::fromStdString(msg.from_name);
-            m_lblChatStatus->setText(name + " is typing…");
-            m_lblChatStatus->setVisible(true);
+            // A ghost row inside the list, so it cannot shift the history.
+            m_chatView->setTypingIndicator(true, name);
             m_typingHideTimer->start();  // auto-hide after 4 s
         }
     }
@@ -585,16 +514,14 @@ void MainWindow::onSignalReceived(SigMsg msg, QString ip)
         if (m_activeFriend && m_activeFriend->id == msg.from_id) {
             QString name  = QString::fromStdString(msg.from_name);
             QString fname = QString::fromStdString(msg.file_name.value_or("file"));
-            m_lblChatStatus->setText(name + " is uploading " + fname + "…");
-            m_lblChatStatus->setVisible(true);
+            m_chatComposer->setStatusText(name + " is uploading " + fname + "…");
             if (m_uploadHideTimer) m_uploadHideTimer->start();
         }
     }
     else if (t == SigType::UploadEnd) {
         QString fromId = QString::fromStdString(msg.from_id);
         if (m_activeFriend && m_activeFriend->id == msg.from_id) {
-            if (m_lblChatStatus->text().contains("uploading"))
-                m_lblChatStatus->setVisible(false);
+            m_chatComposer->setStatusText(QString());
             if (m_uploadHideTimer) m_uploadHideTimer->stop();
         }
     }
@@ -698,21 +625,16 @@ void MainWindow::handleChatMsg(const SigMsg& msg, const QString& ip)
         }
 
         // Show download progress if this conversation is open
-        if (m_activeFriend && m_activeFriend->id == msg.from_id && m_chatUploadBar) {
-            int pct = (int)(((int64_t)tr.chunks.size() * 100) / total);
-            m_chatUploadBar->setValue(pct);
-            m_chatUploadBar->setVisible(true);
-            QString name = QString::fromStdString(msg.from_name);
-            m_lblChatStatus->setText("Receiving " + tr.fileName + "…");
-            m_lblChatStatus->setVisible(true);
+        if (m_activeFriend && m_activeFriend->id == msg.from_id) {
+            m_chatComposer->setProgress((int)(((int64_t)tr.chunks.size() * 100) / total));
+            m_chatComposer->setStatusText("Receiving " + tr.fileName + "…");
         }
 
         if ((int)tr.chunks.size() < total) return;  // still waiting
 
         // All chunks arrived — hide progress
-        if (m_chatUploadBar) m_chatUploadBar->setVisible(false);
-        if (m_lblChatStatus && m_lblChatStatus->text().contains("Receiving"))
-            m_lblChatStatus->setVisible(false);
+        m_chatComposer->setProgress(-1);
+        m_chatComposer->setStatusText(QString());
 
         // All chunks arrived — assemble
         QByteArray full;
@@ -743,8 +665,7 @@ void MainWindow::handleChatMsg(const SigMsg& msg, const QString& ip)
         QString key = buildConvKey(m_myId, fromId);
         m_chatStore->append(key, cm);
         if (m_activeFriend && m_activeFriend->id == msg.from_id) {
-            appendChatMsg(cm, false);
-            scrollChatToBottom();
+            m_chatView->appendMessage(cm);
         } else {
             f->unreadCount++;
             rebuildFriendsList();
@@ -759,8 +680,8 @@ void MainWindow::handleChatMsg(const SigMsg& msg, const QString& ip)
     m_chatStore->append(key, cm);
 
     if (m_activeFriend && m_activeFriend->id == msg.from_id) {
-        appendChatMsg(cm, false);
-        scrollChatToBottom();
+        m_chatView->setTypingIndicator(false);
+        m_chatView->appendMessage(cm);
     } else {
         f->unreadCount++;
         rebuildFriendsList();
@@ -770,10 +691,14 @@ void MainWindow::handleChatMsg(const SigMsg& msg, const QString& ip)
 
 // ── Calls ─────────────────────────────────────────────────────────────────────
 
+/// How long an unanswered call keeps ringing. Both sides use the same value so
+/// the caller's "Calling…" panel and the callee's invite expire together.
+static constexpr int kRingTimeoutMs = 45 * 1000;
+
 void MainWindow::handleCallInv(const SigMsg& msg, const QString& ip)
 {
     if (msg.from_id == m_myId.toStdString()) return;
-#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#ifdef HAS_MEDIA_AUDIO
     // If we are already placing a call, never show an incoming Answer/Decline
     // popup on this side.  This also protects against stale IPs that loop an
     // outgoing invitation back to the caller.
@@ -815,13 +740,22 @@ void MainWindow::handleCallInv(const SigMsg& msg, const QString& ip)
                                            : (mode == "video") ? CallMode::VideoCamera
                                                                : CallMode::Voice;
                 openCallWindow(ip, name, callMode, false);
-            }},
+            }, NotificationWindow::Button::Accept},
             {"Decline", [this, ip, rejMsg]() mutable {
                 sendDirectSignal(ip, rejMsg, false);
-            }}
+            }, NotificationWindow::Button::Reject}
         }
     );
     notif->show();
+
+    // Stop ringing after 45 s and tell the caller, so an unattended machine
+    // does not sit with a live invite on screen indefinitely.
+    QPointer<NotificationWindow> ringing(notif);
+    QTimer::singleShot(kRingTimeoutMs, this, [this, ringing, ip, rejMsg]() mutable {
+        if (!ringing) return;
+        sendDirectSignal(ip, rejMsg, false);
+        ringing->close();
+    });
 }
 
 void MainWindow::handleCallAcc(const SigMsg& msg, const QString& ip)
@@ -848,7 +782,7 @@ void MainWindow::handleCallAcc(const SigMsg& msg, const QString& ip)
 
 void MainWindow::handleRtcSignal(const SigMsg& msg, const QString& ip)
 {
-#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#ifdef HAS_MEDIA_AUDIO
     Q_UNUSED(ip);
     // RTC messages are accepted only after the normal call invitation/acceptance
     // state machine has opened a call window. This prevents stray or looped-back
@@ -861,7 +795,7 @@ void MainWindow::handleRtcSignal(const SigMsg& msg, const QString& ip)
 
 void MainWindow::openCallWindow(const QString& ip, const QString& name, CallMode mode, bool initiator)
 {
-#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#ifdef HAS_MEDIA_AUDIO
     if (m_callWin) return;
     m_callWin = new CallWindow(ip, name, mode, m_myId, m_myName, initiator, this);
     connect(m_callWin, &CallWindow::rtcSignalReady, this, [this, ip](SigMsg msg) {
@@ -889,7 +823,7 @@ void MainWindow::openCallWindow(const QString& ip, const QString& name, CallMode
 
 void MainWindow::sendCallInvite(FriendInfo* f, const QString& mode)
 {
-#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#ifdef HAS_MEDIA_AUDIO
     if (m_callWin || m_callingNotif) {
         showToast("Call already active", "Finish or cancel the current call first.");
         return;
@@ -941,7 +875,7 @@ void MainWindow::sendCallInvite(FriendInfo* f, const QString& mode)
                 sendDirectSignal(peerIp, cancelMsg, false);
                 m_pendingCallMode.clear();
                 m_callingNotif = nullptr;
-            }}
+            }, NotificationWindow::Button::Reject}
         },
         this
     );
@@ -949,6 +883,17 @@ void MainWindow::sendCallInvite(FriendInfo* f, const QString& mode)
         m_callingNotif = nullptr;
     });
     m_callingNotif->show();
+
+    // Give up on the same 45 s deadline the callee uses, so the two sides can
+    // never disagree about whether the call is still ringing.
+    QPointer<NotificationWindow> calling(m_callingNotif);
+    QTimer::singleShot(kRingTimeoutMs, this, [this, calling, peerIp, peerName, cancelMsg]() mutable {
+        if (!calling) return;
+        sendDirectSignal(peerIp, cancelMsg, false);
+        m_pendingCallMode.clear();
+        calling->close();
+        showToast("No answer", QString("%1 did not pick up.").arg(peerName));
+    });
 }
 
 // ── Groups ─────────────────────────────────────────────────────────────────────
@@ -1068,8 +1013,7 @@ void MainWindow::handleGroupMsg(const SigMsg& msg)
         QString key = "grp-" + completedGroupId;
         m_chatStore->append(key, cm);
         if (m_activeGroup && m_activeGroup->groupId == completedGroupId.toStdString()) {
-            appendGroupMsg(cm, false);
-            scrollGroupChatToBottom();
+            m_groupView->appendMessage(cm);
         } else {
             showToast(QString("[Group] ") + completedFromName, completedFileName);
         }
@@ -1082,8 +1026,7 @@ void MainWindow::handleGroupMsg(const SigMsg& msg)
     m_chatStore->append(key, cm);
 
     if (m_activeGroup && m_activeGroup->groupId == *msg.group_id) {
-        appendGroupMsg(cm, false);
-        scrollGroupChatToBottom();
+        m_groupView->appendMessage(cm);
     } else {
         showToast(QString("[Group] ") + QString::fromStdString(msg.from_name),
                   msg.text.value_or("attachment").c_str());
@@ -1163,12 +1106,11 @@ void MainWindow::handleGrpPerm(const SigMsg& msg)
 //  CHAT SEND
 // ══════════════════════════════════════════════════════════════════════════════
 
-void MainWindow::onChatSend()
+void MainWindow::sendChatText(const QString& text, int64_t replyToTs,
+                              const QString& replyName, const QString& replySnippet)
 {
-    QString text = m_chatInput->text().trimmed();
     if (text.isEmpty() || !m_activeFriend) return;
     if (!m_friendMgr->hasFriend(QString::fromStdString(m_activeFriend->id))) return;
-    m_chatInput->clear();
 
     // Stop typing debounce timer so we don't send a spurious typing signal after send
     if (m_typingDebounce) m_typingDebounce->stop();
@@ -1176,18 +1118,25 @@ void MainWindow::onChatSend()
     SigMsg sig = buildSig(SigType::ChatText);
     sig.text = text.toStdString();
     sig.target_id = m_activeFriend->id;
+    if (replyToTs != 0) {
+        sig.reply_to_ts   = replyToTs;
+        sig.reply_name    = replyName.toStdString();
+        sig.reply_snippet = replySnippet.toStdString();
+    }
     SignalingClient::send(QString::fromStdString(m_activeFriend->ip), sig);
 
     ChatMessage cm;
-    cm.kind      = MessageKind::Text;
-    cm.fromId    = m_myId.toStdString();
-    cm.fromName  = m_myName.toStdString();
-    cm.text      = text.toStdString();
-    cm.isMine    = true;
-    cm.timestamp = Helpers::nowMs();
+    cm.kind         = MessageKind::Text;
+    cm.fromId       = m_myId.toStdString();
+    cm.fromName     = m_myName.toStdString();
+    cm.text         = text.toStdString();
+    cm.isMine       = true;
+    cm.timestamp    = Helpers::nowMs();
+    cm.replyToTs    = replyToTs;
+    cm.replyName    = replyName.toStdString();
+    cm.replySnippet = replySnippet.toStdString();
     m_chatStore->append(m_chatConvKey, cm);
-    appendChatMsg(cm, true);
-    scrollChatToBottom();
+    m_chatView->appendMessage(cm);
 }
 
 void MainWindow::onChatSendFile()  { sendFile(false, false); }
@@ -1197,16 +1146,13 @@ void MainWindow::onVoiceNotePress()
 {
 #ifdef HAS_MULTIMEDIA
     if (!m_activeFriend || !m_friendMgr->hasFriend(QString::fromStdString(m_activeFriend->id))) return;
-    if (m_vnRec && m_vnRec->start())
-        m_lblRecording->setVisible(true);
-    else
-        showToast("Microphone unavailable", "Could not start recording a voice note.");
+    if (m_vnRec && m_vnRec->start()) return;
+    showToast("Microphone unavailable", "Could not start recording a voice note.");
 #endif
 }
 
 void MainWindow::onVoiceNoteRelease()
 {
-    m_lblRecording->setVisible(false);
 #ifdef HAS_MULTIMEDIA
     if (!m_vnRec || !m_activeFriend || !m_vnRec->isRecording()) return;
     QByteArray wav = m_vnRec->stop();
@@ -1261,9 +1207,17 @@ void MainWindow::onVoiceNoteRelease()
     cm.data     = wavVec;
     cm.timestamp = Helpers::nowMs();
     m_chatStore->append(m_chatConvKey, cm);
-    appendChatMsg(cm, true);
-    scrollChatToBottom();
+    m_chatView->appendMessage(cm);
 #endif // HAS_MULTIMEDIA
+}
+
+/// Stop the recorder and throw the audio away. VoiceNoteRecorder has no cancel
+/// of its own — stop() is the only way to release the microphone.
+void MainWindow::onVoiceNoteCancel()
+{
+#ifdef HAS_MULTIMEDIA
+    if (m_vnRec && m_vnRec->isRecording()) (void)m_vnRec->stop();
+#endif
 }
 
 void MainWindow::onChatVoiceCall() { if (m_activeFriend) sendCallInvite(m_activeFriend, "voice"); }
@@ -1273,9 +1227,9 @@ void MainWindow::onChatVideoCall() { if (m_activeFriend) sendCallInvite(m_active
 //  GROUP SEND
 // ══════════════════════════════════════════════════════════════════════════════
 
-void MainWindow::onGroupSend()
+void MainWindow::sendGroupText(const QString& text, int64_t replyToTs,
+                               const QString& replyName, const QString& replySnippet)
 {
-    QString text = m_groupInput->text().trimmed();
     if (text.isEmpty() || !m_activeGroup) return;
 
     auto myPerms = m_activeGroup->getPermissions(m_myId.toStdString());
@@ -1284,22 +1238,28 @@ void MainWindow::onGroupSend()
         !m_activeGroup->isHelper(m_myId.toStdString()))
     { showToast("Restricted", "You cannot send messages in this group."); return; }
 
-    m_groupInput->clear();
     SigMsg sig = buildSig(SigType::GrpText);
     sig.text     = text.toStdString();
     sig.group_id = m_activeGroup->groupId;
+    if (replyToTs != 0) {
+        sig.reply_to_ts   = replyToTs;
+        sig.reply_name    = replyName.toStdString();
+        sig.reply_snippet = replySnippet.toStdString();
+    }
     broadcastToGroup(m_activeGroup, sig);
 
     ChatMessage cm;
-    cm.kind     = MessageKind::Text;
-    cm.fromId   = m_myId.toStdString();
-    cm.fromName = m_myName.toStdString();
-    cm.text     = text.toStdString();
-    cm.isMine   = true;
-    cm.timestamp = Helpers::nowMs();
+    cm.kind         = MessageKind::Text;
+    cm.fromId       = m_myId.toStdString();
+    cm.fromName     = m_myName.toStdString();
+    cm.text         = text.toStdString();
+    cm.isMine       = true;
+    cm.timestamp    = Helpers::nowMs();
+    cm.replyToTs    = replyToTs;
+    cm.replyName    = replyName.toStdString();
+    cm.replySnippet = replySnippet.toStdString();
     m_chatStore->append(m_groupConvKey, cm);
-    appendGroupMsg(cm, true);
-    scrollGroupChatToBottom();
+    m_groupView->appendMessage(cm);
 }
 
 void MainWindow::onGroupSendFile()  { sendFile(true, false); }
@@ -1309,16 +1269,13 @@ void MainWindow::onGroupVoiceNotePress()
 {
 #ifdef HAS_MULTIMEDIA
     if (!m_activeGroup) return;
-    if (m_vnRecGroup && m_vnRecGroup->start())
-        m_lblGrpRecording->setVisible(true);
-    else
-        showToast("Microphone unavailable", "Could not start recording a voice note.");
+    if (m_vnRecGroup && m_vnRecGroup->start()) return;
+    showToast("Microphone unavailable", "Could not start recording a voice note.");
 #endif
 }
 
 void MainWindow::onGroupVoiceNoteRelease()
 {
-    m_lblGrpRecording->setVisible(false);
 #ifdef HAS_MULTIMEDIA
     if (!m_vnRecGroup || !m_activeGroup || !m_vnRecGroup->isRecording()) return;
     QByteArray wav = m_vnRecGroup->stop();
@@ -1377,9 +1334,16 @@ void MainWindow::onGroupVoiceNoteRelease()
     cm.data     = wavVec;
     cm.timestamp = Helpers::nowMs();
     m_chatStore->append(m_groupConvKey, cm);
-    appendGroupMsg(cm, true);
-    scrollGroupChatToBottom();
+    m_groupView->appendMessage(cm);
 #endif // HAS_MULTIMEDIA
+}
+
+/// Same as onVoiceNoteCancel, for the group recorder.
+void MainWindow::onGroupVoiceNoteCancel()
+{
+#ifdef HAS_MULTIMEDIA
+    if (m_vnRecGroup && m_vnRecGroup->isRecording()) (void)m_vnRecGroup->stop();
+#endif
 }
 
 void MainWindow::onGroupVoiceCall()
@@ -1412,7 +1376,6 @@ void MainWindow::sendFile(bool isGroup, bool imagesOnly)
         QMessageBox picker(this);
         picker.setWindowTitle("Send");
         picker.setText("What would you like to send?");
-        picker.setStyleSheet("QMessageBox{background:#1E1E2E;color:#CDD6F4;}QPushButton{background:#313244;color:#CDD6F4;border:none;border-radius:4px;padding:6px 18px;}QPushButton:hover{background:#45475A;}");
         auto* btnFile   = picker.addButton("File",   QMessageBox::AcceptRole);
         auto* btnFolder = picker.addButton("Folder", QMessageBox::AcceptRole);
         picker.addButton("Cancel", QMessageBox::RejectRole);
@@ -1527,25 +1490,23 @@ void MainWindow::sendFile(bool isGroup, bool imagesOnly)
         startSig.group_id  = m_activeGroup->groupId;
         broadcastToGroup(m_activeGroup, startSig);
 
-        // Show local upload progress bar
-        if (m_chatUploadBar) {
-            m_chatUploadBar->setValue(0);
-            m_chatUploadBar->setVisible(true);
-        }
+        // Local upload progress — a hairline on the composer's top edge.
+        m_groupComposer->setProgress(0);
+        m_groupComposer->setStatusText("Sending " + QString::fromStdString(cm.fileName) + "…");
 
         sendChunked([&](SigMsg sig){
             sig.type     = SigType::GrpFile;
             sig.group_id = m_activeGroup->groupId;
             broadcastToGroup(m_activeGroup, sig);
-            // Update progress bar
-            if (m_chatUploadBar && totalChunks > 0) {
+            if (totalChunks > 0) {
                 int pct = (int)(((sig.chunk_index.value_or(0) + 1) * 100LL) / totalChunks);
-                m_chatUploadBar->setValue(pct);
+                m_groupComposer->setProgress(pct);
                 QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
             }
         });
 
-        if (m_chatUploadBar) m_chatUploadBar->setVisible(false);
+        m_groupComposer->setProgress(-1);
+        m_groupComposer->setStatusText(QString());
 
         // Send UploadEnd
         SigMsg endSig = buildSig(SigType::UploadEnd);
@@ -1553,8 +1514,7 @@ void MainWindow::sendFile(bool isGroup, bool imagesOnly)
         broadcastToGroup(m_activeGroup, endSig);
 
         m_chatStore->append(m_groupConvKey, cm);
-        appendGroupMsg(cm, true);
-        scrollGroupChatToBottom();
+        m_groupView->appendMessage(cm);
     } else if (!isGroup && m_activeFriend) {
         QString peerIp = QString::fromStdString(m_activeFriend->ip);
 
@@ -1564,25 +1524,23 @@ void MainWindow::sendFile(bool isGroup, bool imagesOnly)
         startSig.target_id = m_activeFriend->id;
         sendDirectSignal(peerIp, startSig, false);
 
-        // Show local upload progress bar
-        if (m_chatUploadBar) {
-            m_chatUploadBar->setValue(0);
-            m_chatUploadBar->setVisible(true);
-        }
+        // Local upload progress — a hairline on the composer's top edge.
+        m_chatComposer->setProgress(0);
+        m_chatComposer->setStatusText("Sending " + QString::fromStdString(cm.fileName) + "…");
 
         sendChunked([&](SigMsg sig){
             sig.type = SigType::ChatFile;
             sig.target_id = m_activeFriend->id;
             sendDirectSignal(peerIp, sig, true);
-            // Update progress bar
-            if (m_chatUploadBar && totalChunks > 0) {
+            if (totalChunks > 0) {
                 int pct = (int)(((sig.chunk_index.value_or(0) + 1) * 100LL) / totalChunks);
-                m_chatUploadBar->setValue(pct);
+                m_chatComposer->setProgress(pct);
                 QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
             }
         });
 
-        if (m_chatUploadBar) m_chatUploadBar->setVisible(false);
+        m_chatComposer->setProgress(-1);
+        m_chatComposer->setStatusText(QString());
 
         // Send UploadEnd
         SigMsg endSig = buildSig(SigType::UploadEnd);
@@ -1590,8 +1548,7 @@ void MainWindow::sendFile(bool isGroup, bool imagesOnly)
         sendDirectSignal(peerIp, endSig, false);
 
         m_chatStore->append(m_chatConvKey, cm);
-        appendChatMsg(cm, true);
-        scrollChatToBottom();
+        m_chatView->appendMessage(cm);
     }
 }
 
@@ -1801,51 +1758,39 @@ void MainWindow::onCtxDeleteConversation()
 
     // Clear the live view if this conversation is open
     if (convKey == m_chatConvKey) {
-        m_chatMsgList->clear();
+        m_chatView->clearMessages();
     } else if (convKey == m_groupConvKey) {
-        m_groupMsgList->clear();
+        m_groupView->clearMessages();
     }
 }
 
 void MainWindow::onCtxDeleteMessages()
 {
-    // Determine which list was right-clicked
-    QListWidget*  list    = nullptr;
-    QString       convKey;
+    // Whichever panel is showing owns the selection.
+    ChatView* view = nullptr;
+    QString   convKey;
 
     if (m_panelChat->isVisible() && m_activeFriend) {
-        list    = m_chatMsgList;
+        view    = m_chatView;
         convKey = m_chatConvKey;
     } else if (m_panelGroup->isVisible() && m_activeGroup) {
-        list    = m_groupMsgList;
+        view    = m_groupView;
         convKey = m_groupConvKey;
     }
-    if (!list || convKey.isEmpty()) return;
+    if (!view || convKey.isEmpty()) return;
 
-    // Collect timestamps of selected (or right-clicked) items
-    QList<int64_t> toDelete;
-    QList<QListWidgetItem*> toRemove;
-
-    auto selected = list->selectedItems();
-    // If nothing is selected, fall back to the item under the cursor
-    if (selected.isEmpty()) {
-        auto* cur = list->currentItem();
-        if (cur) selected.append(cur);
-    }
-    for (auto* it : selected) {
-        bool ok = false;
-        int64_t ts = it->data(Qt::UserRole).toLongLong(&ok);
-        if (ok) {
-            toDelete.append(ts);
-            toRemove.append(it);
-        }
-    }
+    const QList<int64_t> toDelete = view->selectedTimestamps();
     if (toDelete.isEmpty()) return;
 
     m_chatStore->deleteMessages(convKey, toDelete);
 
-    // Remove from the live list widget
-    for (auto* it : toRemove) delete it;
+    // Replay the conversation rather than plucking items out of the list:
+    // grouping, day separators and run shapes all depend on what's adjacent,
+    // so a hole in the middle would leave the survivors mis-shaped.
+    view->clearMessages();
+    const auto history = m_chatStore->load(convKey);
+    for (const auto& msg : history) view->appendMessage(msg);
+    view->scrollToLatest();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2004,7 +1949,7 @@ QWidget* makeConversationListRow(const QString& title,
 {
     auto* row = new QWidget(parent);
     row->setAttribute(Qt::WA_StyledBackground, true);
-    row->setStyleSheet("background:transparent;");
+    row->setObjectName("listRow");
 
     auto* layout = new QHBoxLayout(row);
     layout->setContentsMargins(10, 7, 10, 7);
@@ -2013,13 +1958,11 @@ QWidget* makeConversationListRow(const QString& title,
     auto* avatar = new QLabel(avatarText, row);
     avatar->setFixedSize(38, 38);
     avatar->setAlignment(Qt::AlignCenter);
-    avatar->setStyleSheet(QString(
-        "background:%1;color:%2;border-radius:19px;font-size:13px;font-weight:700;")
-        .arg(locked ? "#20202E" : (online ? "#CBA6F7" : "#313244"))
-        .arg(locked ? "#6C7086" : (online ? "#11111B" : "#CDD6F4")));
+    avatar->setObjectName("rowAvatar");
+    UiTheme::setClass(avatar, locked ? "locked" : (online ? "on" : "off"));
     if (!avatarIcon.isEmpty()) {
         avatar->setText(QString());
-        avatar->setPixmap(lcIcon(avatarIcon).pixmap(22, 22));
+        avatar->setPixmap(UiTheme::icon(avatarIcon).pixmap(22, 22));
     }
     layout->addWidget(avatar);
 
@@ -2028,14 +1971,14 @@ QWidget* makeConversationListRow(const QString& title,
     textCol->setSpacing(2);
 
     auto* lblTitle = new QLabel(title, row);
-    lblTitle->setStyleSheet(QString("color:%1;font-size:13px;font-weight:600;")
-                                .arg(locked ? "#6C7086" : "#CDD6F4"));
+    lblTitle->setObjectName("rowTitle");
+    UiTheme::setClass(lblTitle, locked ? "locked" : "normal");
     lblTitle->setTextFormat(Qt::PlainText);
     lblTitle->setWordWrap(false);
 
     auto* lblSub = new QLabel(subtitle, row);
-    lblSub->setStyleSheet(QString("color:%1;font-size:10px;")
-                              .arg(online ? "#A6E3A1" : "#6C7086"));
+    lblSub->setObjectName("rowSubtitle");
+    UiTheme::setClass(lblSub, online ? "on" : "off");
     lblSub->setTextFormat(Qt::PlainText);
     lblSub->setWordWrap(false);
 
@@ -2046,10 +1989,8 @@ QWidget* makeConversationListRow(const QString& title,
     if (!pingText.isEmpty()) {
         auto* ping = new QLabel(pingText, row);
         ping->setAlignment(Qt::AlignCenter);
-        ping->setStyleSheet(QString(
-            "color:%1;background:#11111B;border:1px solid #313244;"
-            "border-radius:9px;font-size:9px;font-weight:600;padding:2px 6px;")
-            .arg(online ? "#A6E3A1" : "#6C7086"));
+        ping->setObjectName("rowPing");
+        UiTheme::setClass(ping, online ? "on" : "off");
         layout->addWidget(ping);
     }
 
@@ -2058,9 +1999,7 @@ QWidget* makeConversationListRow(const QString& title,
         badge->setAlignment(Qt::AlignCenter);
         badge->setMinimumWidth(22);
         badge->setFixedHeight(22);
-        badge->setStyleSheet(
-            "background:#CBA6F7;color:#11111B;border-radius:11px;"
-            "font-size:10px;font-weight:700;padding:0 6px;");
+        badge->setObjectName("rowBadge");
         layout->addWidget(badge);
     }
 
@@ -2144,11 +2083,11 @@ void MainWindow::rebuildRequestsList()
 
         // Name
         auto* lblName = new QLabel(QString::fromStdString(req.fromName), w);
-        lblName->setStyleSheet("color:#E0E0E0;font-size:13px;font-weight:500;");
+        lblName->setObjectName("reqName");
 
         // IP (subtle, like C#)
         auto* lblIp = new QLabel(QString::fromStdString(req.fromIp), w);
-        lblIp->setStyleSheet("color:#555555;font-size:10px;");
+        lblIp->setObjectName("reqIp");
 
         wl->addWidget(lblName);
         wl->addWidget(lblIp);
@@ -2161,20 +2100,14 @@ void MainWindow::rebuildRequestsList()
 
         auto* accept  = new QPushButton("Accept", btnRow);
         auto* decline = new QPushButton("Decline", btnRow);
-        accept->setIcon(lcIcon("check"));
+        accept->setIcon(UiTheme::icon("check"));
         accept->setIconSize(QSize(14,14));
-        decline->setIcon(lcIcon("close"));
+        decline->setIcon(UiTheme::icon("close"));
         decline->setIconSize(QSize(14,14));
         accept->setFixedHeight(24);
         decline->setFixedHeight(24);
-        accept->setStyleSheet(
-            "QPushButton{background:#CBA6F7;color:#11111B;border:none;"
-            "border-radius:6px;font-size:11px;font-weight:bold;padding:0 10px;}"
-            "QPushButton:hover{background:#B4BEFE;}");
-        decline->setStyleSheet(
-            "QPushButton{background:#313244;color:#F38BA8;border:none;"
-            "border-radius:6px;font-size:11px;padding:0 10px;}"
-            "QPushButton:hover{background:#45475A;}");
+        accept->setObjectName("reqAccept");
+        decline->setObjectName("reqDecline");
 
         btnLayout->addWidget(accept);
         btnLayout->addWidget(decline);
@@ -2232,430 +2165,6 @@ void MainWindow::syncGroupMembers(GroupInfo* single)
     else         { for (auto& g : m_friendMgr->groups()) process(g); }
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  MESSAGE RENDERING
-// ══════════════════════════════════════════════════════════════════════════════
-
-// Helper: Calculate the minimum width needed to display text without wrapping.
-// Returns the width capped at maxW, accounting for left/right padding and newlines.
-static int calculateRequiredBubbleWidth(const QString& text, int maxW)
-{
-    constexpr int kPadding = 24;        // 12px left + 12px right
-    constexpr int kMinBubbleW = 132;   // Minimum bubble width
-    
-    if (text.isEmpty())
-        return kMinBubbleW;
-    
-    // Use QFontMetrics to measure text width
-    QFont f; f.setPixelSize(14);
-    QFontMetrics fm(f);
-    
-    // Split by newlines and find the longest line
-    QStringList lines = text.split('\n');
-    int maxLineWidth = 0;
-    for (const QString& line : lines) {
-        int w = fm.horizontalAdvance(line);
-        maxLineWidth = qMax(maxLineWidth, w);
-    }
-    
-    // Add padding and cap at maxW
-    int requiredW = maxLineWidth + kPadding;
-    return qMax(kMinBubbleW, qMin(requiredW, maxW));
-}
-
-// bubbleMaxW  — exact pixel width the bubble widget will be fixed to.
-//               Caller computes: min(viewportWidth - outerMargins, 520).
-//               Knowing this up-front lets QLabel::heightForWidth() return
-//               the correct wrapped height before the widget is ever shown.
-// parentList  — the QListWidget that owns the item; needed so the "Show more /
-//               Show less" toggle can locate its item and update the size hint.
-static QWidget* buildBubble(const ChatMessage& cm, bool isMine,
-                             int bubbleMaxW, QListWidget* parentList)
-{
-    auto* outer = new QWidget();
-    auto* outerLayout = new QHBoxLayout(outer);
-    outerLayout->setContentsMargins(8, 3, 8, 3);
-    outerLayout->setSpacing(0);
-
-    auto* bubble = new QWidget(outer);
-    bubble->setObjectName(isMine ? "bubbleMine" : "bubbleTheirs");
-    bubble->setMinimumWidth(132);
-    // Fix the bubble to exactly the width the caller computed.
-    // This is what allows QLabel's heightForWidth() to be right.
-    bubble->setFixedWidth(bubbleMaxW);
-
-    auto* bLayout = new QVBoxLayout(bubble);
-    bLayout->setContentsMargins(12, 8, 12, 8);
-    bLayout->setSpacing(4);
-
-    // Sender name (shown for others in group chats)
-    if (!cm.nameDisplay().empty()) {
-        auto* nameLbl = new QLabel(QString::fromStdString(cm.nameDisplay()), bubble);
-        nameLbl->setObjectName("msgName");
-        nameLbl->setStyleSheet("color:#CBA6F7; font-size:11px; font-weight:bold; background:transparent;");
-        nameLbl->setWordWrap(true);
-        bLayout->addWidget(nameLbl);
-    }
-
-    switch (cm.kind) {
-
-    case MessageKind::Text: {
-        constexpr int kFoldThreshold = 300;
-        constexpr int kMaxExpandedHeight = 400;  // Max height for expanded messages
-        QString fullText  = QString::fromStdString(cm.text);
-        bool    isLong    = fullText.length() > kFoldThreshold;
-        QString shortText = isLong
-            ? fullText.left(kFoldThreshold).trimmed() + "…"
-            : fullText;
-
-        // Inner text width = bubble width minus horizontal padding
-        const int textW = qMax(96, bubbleMaxW - 24);   // 12 px padding on each side
-
-        auto* txtLbl = new QLabel(isLong ? shortText : fullText, bubble);
-        txtLbl->setObjectName("msgText");
-        txtLbl->setTextFormat(Qt::PlainText);
-        txtLbl->setWordWrap(true);
-        txtLbl->setStyleSheet(
-            "QLabel#msgText { "
-            "color:#F4F4FB; font-size:14px; background:transparent; border:none; "
-            "padding:0; margin:0; "
-            "}");
-        txtLbl->setFixedWidth(textW);
-        txtLbl->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::LinksAccessibleByMouse);
-        txtLbl->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
-        bLayout->addWidget(txtLbl);
-
-        if (isLong) {
-            auto* toggleBtn = new QPushButton("▼  Show more", bubble);
-            toggleBtn->setFlat(true);
-            toggleBtn->setCursor(Qt::PointingHandCursor);
-            toggleBtn->setStyleSheet(
-                "QPushButton { color:#CBA6F7; font-size:11px; background:transparent;"
-                " border:none; padding:2px 0; text-align:left; }"
-                "QPushButton:hover { color:#CDD6F4; }");
-            toggleBtn->setProperty("expanded", false);
-
-            QObject::connect(toggleBtn, &QPushButton::clicked,
-                [txtLbl, toggleBtn, fullText, shortText, outer, parentList, kMaxExpandedHeight]() {
-
-                bool expanded = toggleBtn->property("expanded").toBool();
-                expanded = !expanded;
-                toggleBtn->setProperty("expanded", expanded);
-                txtLbl->setText(expanded ? fullText : shortText);
-                toggleBtn->setText(expanded ? "▲  Show less" : "▼  Show more");
-
-                Q_UNUSED(kMaxExpandedHeight);
-                txtLbl->adjustSize();
-
-                // Recalculate bubble size and update list item
-                outer->adjustSize();
-                if (parentList) {
-                    for (int i = 0; i < parentList->count(); ++i) {
-                        auto* it = parentList->item(i);
-                        if (parentList->itemWidget(it) == outer) {
-                            it->setSizeHint(QSize(outer->width(),
-                                                  outer->sizeHint().height() + 8));
-                            parentList->viewport()->update();
-                            break;
-                        }
-                    }
-                }
-            });
-            bLayout->addWidget(toggleBtn);
-        }
-        break;
-    }
-
-    case MessageKind::Image: {
-        if (!cm.data.empty()) {
-            QPixmap px;
-            px.loadFromData(cm.data.data(), (int)cm.data.size());
-            if (!px.isNull()) {
-                auto* imgLbl = new QLabel(bubble);
-                // Scale to max 360 wide, preserve aspect ratio
-                imgLbl->setPixmap(px.scaled(360, 270, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-                imgLbl->setAlignment(Qt::AlignLeft);
-                imgLbl->setCursor(Qt::PointingHandCursor);
-                imgLbl->setToolTip("Click to save image");
-                std::vector<uint8_t> dataCopy = cm.data;
-                std::string fileName = cm.fileName;
-                QObject::connect(imgLbl, &QLabel::linkActivated, []{});
-                // Click to save via mouse press event (QLabel has no clicked signal)
-                auto* clickFilter = new QObject(imgLbl);
-                imgLbl->installEventFilter(clickFilter);
-                QObject::connect(clickFilter, &QObject::destroyed, []{});
-                // Use a helper button overlapping for click
-                auto* saveBtn = new QPushButton("Save", bubble);
-                saveBtn->setIcon(lcIcon("save"));
-                saveBtn->setIconSize(QSize(14,14));
-                saveBtn->setStyleSheet(
-                    "QPushButton{background:rgba(0,0,0,140);color:#CDD6F4;border:none;"
-                    "border-radius:4px;font-size:11px;padding:3px 8px;}"
-                    "QPushButton:hover{background:rgba(0,0,0,200);}");
-                QObject::connect(saveBtn, &QPushButton::clicked, [dataCopy, fileName]() {
-                    QString p = QFileDialog::getSaveFileName(nullptr, "Save image",
-                        QString::fromStdString(fileName));
-                    if (p.isEmpty()) return;
-                    QFile out(p);
-                    if (out.open(QIODevice::WriteOnly))
-                        out.write(reinterpret_cast<const char*>(dataCopy.data()), (qint64)dataCopy.size());
-                });
-                // Filename label below image
-                auto* fnLbl = new QLabel(QString::fromStdString(cm.fileName), bubble);
-                fnLbl->setStyleSheet("color:#6C7086;font-size:10px;");
-                fnLbl->setWordWrap(true);
-                bLayout->addWidget(imgLbl);
-                bLayout->addWidget(saveBtn);
-                bLayout->addWidget(fnLbl);
-            } else {
-                // Fallback — treat as file
-                goto file_fallback;
-            }
-        } else {
-            file_fallback:
-            auto* lbl = new QLabel(QString::fromStdString(cm.fileName), bubble);
-            lbl->setObjectName("msgText");
-            lbl->setStyleSheet("color:#F4F4FB; font-size:14px; background:transparent;");
-            lbl->setWordWrap(true);
-            bLayout->addWidget(lbl);
-        }
-        break;
-    }
-
-    case MessageKind::File: {
-        // File info row
-        auto* fileBox = new QWidget(bubble);
-        fileBox->setStyleSheet(
-            "background:" + QString(isMine ? "#2A1F50" : "#232323") + ";"
-            "border-radius:6px;");
-        auto* fbLayout = new QVBoxLayout(fileBox);
-        fbLayout->setContentsMargins(10, 8, 10, 8);
-        fbLayout->setSpacing(4);
-
-        QString fname = QString::fromStdString(cm.fileName);
-        qint64  fsize = (qint64)cm.data.size();
-        QString sizeStr;
-        if (fsize > 1024*1024) sizeStr = QString::number(fsize/1024/1024.0, 'f', 1) + " MB";
-        else if (fsize > 1024) sizeStr = QString::number(fsize/1024.0,      'f', 1) + " KB";
-        else                   sizeStr = QString::number(fsize) + " B";
-
-        auto* iconRow = new QHBoxLayout();
-        auto* iconLbl = new QLabel(fileBox);
-        iconLbl->setPixmap(lcIcon("file").pixmap(24, 24));
-        auto* infoCol = new QVBoxLayout();
-        auto* nameLbl2 = new QLabel(fname, fileBox);
-        nameLbl2->setStyleSheet("color:#CDD6F4;font-size:13px;font-weight:500;");
-        nameLbl2->setWordWrap(true);
-        auto* sizeLbl = new QLabel(sizeStr, fileBox);
-        sizeLbl->setStyleSheet("color:#6C7086;font-size:11px;");
-        infoCol->addWidget(nameLbl2);
-        infoCol->addWidget(sizeLbl);
-        iconRow->addWidget(iconLbl);
-        iconRow->addLayout(infoCol, 1);
-        fbLayout->addLayout(iconRow);
-
-        auto* saveBtn = new QPushButton("Save file", fileBox);
-        saveBtn->setIcon(lcIcon("save"));
-        saveBtn->setIconSize(QSize(14,14));
-        saveBtn->setStyleSheet(
-            "QPushButton{background:#CBA6F7;color:#11111B;border:none;"
-            "border-radius:4px;font-size:11px;padding:5px 10px;}"
-            "QPushButton:hover{background:#B4BEFE;}");
-        std::vector<uint8_t> dataCopy = cm.data;
-        std::string fileNameCopy = cm.fileName;
-        QObject::connect(saveBtn, &QPushButton::clicked, [dataCopy, fileNameCopy]() {
-            QString p = QFileDialog::getSaveFileName(nullptr, "Save file",
-                QString::fromStdString(fileNameCopy));
-            if (p.isEmpty()) return;
-            QFile out(p);
-            if (out.open(QIODevice::WriteOnly))
-                out.write(reinterpret_cast<const char*>(dataCopy.data()), (qint64)dataCopy.size());
-        });
-        fbLayout->addWidget(saveBtn);
-        bLayout->addWidget(fileBox);
-        break;
-    }
-
-    case MessageKind::VoiceNote: {
-        auto* vnBox = new QWidget(bubble);
-        vnBox->setStyleSheet(
-            "background:" + QString(isMine ? "#2A1F50" : "#232323") + ";"
-            "border-radius:6px;");
-        auto* vnLayout = new QHBoxLayout(vnBox);
-        vnLayout->setContentsMargins(10, 8, 10, 8);
-        vnLayout->setSpacing(8);
-
-        auto* micLbl = new QLabel(vnBox);
-        micLbl->setPixmap(lcIcon("voice").pixmap(22, 22));
-        auto* textLbl = new QLabel("Voice note", vnBox);
-        textLbl->setStyleSheet("color:#CDD6F4;font-size:12px;");
-        auto* playBtn = new QPushButton("Play", vnBox);
-        playBtn->setIcon(lcIcon("play"));
-        playBtn->setIconSize(QSize(14,14));
-        playBtn->setStyleSheet(
-            "QPushButton{background:#CBA6F7;color:#11111B;border:none;"
-            "border-radius:4px;font-size:11px;padding:5px 12px;}"
-            "QPushButton:hover{background:#B4BEFE;}");
-        std::vector<uint8_t> wavData = cm.data;
-        QObject::connect(playBtn, &QPushButton::clicked, [wavData]() {
-            if (wavData.empty()) return;
-            QString tmp = QDir::temp().filePath(
-                "localcall_voice_" + QString::number(QDateTime::currentMSecsSinceEpoch()) + ".wav");
-            QFile out(tmp);
-            if (!out.open(QIODevice::WriteOnly)) return;
-            out.write(reinterpret_cast<const char*>(wavData.data()), (qint64)wavData.size());
-            out.close();
-#ifdef HAS_MULTIMEDIA
-            auto* player = new QMediaPlayer;
-            auto* audioOut = new QAudioOutput(player);
-            player->setAudioOutput(audioOut);
-            player->setSource(QUrl::fromLocalFile(tmp));
-            QObject::connect(player, &QMediaPlayer::mediaStatusChanged, player, [player](QMediaPlayer::MediaStatus st) {
-                if (st == QMediaPlayer::EndOfMedia || st == QMediaPlayer::InvalidMedia)
-                    player->deleteLater();
-            });
-            QObject::connect(player, &QMediaPlayer::errorOccurred, player, [player](QMediaPlayer::Error, const QString&) {
-                player->deleteLater();
-            });
-            player->play();
-#else
-            QDesktopServices::openUrl(QUrl::fromLocalFile(tmp));
-#endif
-        });
-        vnLayout->addWidget(micLbl);
-        vnLayout->addWidget(textLbl, 1);
-        vnLayout->addWidget(playBtn);
-        bLayout->addWidget(vnBox);
-        break;
-    }
-
-    default: break;
-    }
-
-    // Timestamp — right-aligned for mine, left for theirs
-    auto* meta = new QLabel(QString::fromStdString(cm.timeStr()), bubble);
-    meta->setObjectName("msgMeta");
-    meta->setStyleSheet("color:#6C7086; font-size:10px; background:transparent;");
-    meta->setAlignment(isMine ? Qt::AlignRight : Qt::AlignLeft);
-    bLayout->addWidget(meta);
-
-    if (isMine) { outerLayout->addStretch(); outerLayout->addWidget(bubble); }
-    else        { outerLayout->addWidget(bubble); outerLayout->addStretch(); }
-
-    return outer;
-}
-
-// ── Helper: compute accurate item height using font metrics so we never
-//    under-count lines for word-wrapped text messages. -----------------------
-static int measureBubbleHeight(const ChatMessage& cm, int bubbleMaxW)
-{
-    const int innerW    = bubbleMaxW - 24;   // 12 px padding each side
-    const int padV      = 16;                // 8 px top + 8 px bottom
-    const int spacing   = 4;
-    const int metaH     = 14;               // timestamp row ≈ 10 px font + 4 spacing
-    const int nameH     = cm.nameDisplay().empty() ? 0 : 16 + spacing;
-
-    int contentH = 0;
-
-    if (cm.kind == MessageKind::Text) {
-        QString text = QString::fromStdString(cm.text);
-        bool isLong = text.length() > 300;
-        // Cap at kFoldThreshold for the initial (collapsed) state
-        if (isLong)
-            text = text.left(300).trimmed() + "…";
-        
-        QFont f;
-        f.setPixelSize(14);
-        QFontMetrics fm(f);
-        const QRect bounds = fm.boundingRect(QRect(0, 0, innerW, 20000),
-                                             Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop,
-                                             text);
-        contentH = qMax(28, bounds.height() + 6);  // minimum height
-        
-        if (isLong) contentH += 20;  // "Show more" button row
-    } else if (cm.kind == MessageKind::Image) {
-        contentH = 270 + 20 + 14;  // image + save btn + filename
-    } else if (cm.kind == MessageKind::File || cm.kind == MessageKind::VoiceNote) {
-        contentH = 72;
-    } else {
-        contentH = 24;
-    }
-
-    return padV + nameH + contentH + spacing + metaH;
-}
-
-void MainWindow::appendChatMsg(const ChatMessage& cm, bool isMine)
-{
-    auto* item = new QListWidgetItem(m_chatMsgList);
-    item->setData(Qt::UserRole, (qlonglong)cm.timestamp);
-
-    const int viewW    = m_chatMsgList->viewport()->width();
-    const int outerW   = viewW - 4;
-    // Bubble is capped at 520; calculate actual width needed for content
-    const int maxBubbleW = qMin(qMax(160, (outerW * 68) / 100), 560);
-    
-    int bubbleW = maxBubbleW;
-    if (cm.kind == MessageKind::Text) {
-        // For text messages, calculate the width actually needed
-        QString displayText = QString::fromStdString(cm.text);
-        if (displayText.length() > 300)
-            displayText = displayText.left(300).trimmed() + "…";
-        bubbleW = calculateRequiredBubbleWidth(displayText, maxBubbleW);
-    }
-
-    auto* w = buildBubble(cm, isMine, bubbleW, m_chatMsgList);
-    w->setFixedWidth(outerW);
-
-    // Use font-metrics height — avoids the Qt sizeHint undercount on word-wrap labels
-    const int h = measureBubbleHeight(cm, bubbleW) + 6 /* outer top+bottom margins */;
-    item->setSizeHint(QSize(outerW, h));
-    m_chatMsgList->setItemWidget(item, w);
-}
-
-void MainWindow::appendGroupMsg(const ChatMessage& cm, bool isMine)
-{
-    auto* item = new QListWidgetItem(m_groupMsgList);
-    item->setData(Qt::UserRole, (qlonglong)cm.timestamp);
-
-    const int viewW   = m_groupMsgList->viewport()->width();
-    const int outerW  = viewW - 4;
-    const int maxBubbleW = qMin(qMax(160, (outerW * 68) / 100), 560);
-    
-    int bubbleW = maxBubbleW;
-    if (cm.kind == MessageKind::Text) {
-        // For text messages, calculate the width actually needed
-        QString displayText = QString::fromStdString(cm.text);
-        if (displayText.length() > 300)
-            displayText = displayText.left(300).trimmed() + "…";
-        bubbleW = calculateRequiredBubbleWidth(displayText, maxBubbleW);
-    }
-
-    auto* w = buildBubble(cm, isMine, bubbleW, m_groupMsgList);
-    w->setFixedWidth(outerW);
-
-    const int h = measureBubbleHeight(cm, bubbleW) + 6;
-    item->setSizeHint(QSize(outerW, h));
-    m_groupMsgList->setItemWidget(item, w);
-}
-
-void MainWindow::scrollChatToBottom()
-{
-    QTimer::singleShot(0, m_chatMsgList, [this](){
-        m_chatMsgList->scrollToBottom();
-    });
-}
-
-void MainWindow::scrollGroupChatToBottom()
-{
-    QTimer::singleShot(0, m_groupMsgList, [this](){
-        m_groupMsgList->scrollToBottom();
-    });
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  UTILITIES
-// ══════════════════════════════════════════════════════════════════════════════
-
 void MainWindow::broadcastToGroup(GroupInfo* g, const SigMsg& sig)
 {
     const bool reliable = sig.transfer_id.has_value();
@@ -2691,6 +2200,9 @@ ChatMessage MainWindow::sigToMessage(const SigMsg& sig, bool isMine) const
         (cm.kind == MessageKind::VoiceNote) ? "audio/wav" : "");
     cm.isMine   = isMine;
     cm.timestamp = sig.ts;
+    cm.replyToTs    = sig.reply_to_ts.value_or(0);
+    cm.replyName    = sig.reply_name.value_or("");
+    cm.replySnippet = sig.reply_snippet.value_or("");
     if (sig.data) cm.data = Helpers::base64Decode(*sig.data);
     return cm;
 }

@@ -84,7 +84,7 @@ std::wstring trim(std::wstring value)
 
 std::wstring readTextFileUtf16OrAscii(const std::wstring& path)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(path.c_str(), std::ios::binary);
     if (!in) return L"";
     std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     if (bytes.empty()) return L"";

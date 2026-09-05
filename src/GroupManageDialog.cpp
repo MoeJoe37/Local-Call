@@ -3,6 +3,7 @@ using json = nlohmann::json;
 #include "GroupManageDialog.h"
 #include "SignalingClient.h"
 #include "Helpers.h"
+#include "UiTheme.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -15,39 +16,6 @@ using json = nlohmann::json;
 #include <QIcon>
 #include <algorithm>
 
-static constexpr const char* BASE_SS = R"(
-    QDialog    { background: #1E1E2E; }
-    QLabel     { color: #CDD6F4; font-size: 13px; }
-    QScrollArea { background: #181825; border: none; }
-    QWidget#memberContainer { background: #181825; }
-    QFrame#memberRow { background: #1E1E2E; border-bottom: 1px solid #313244; }
-    QPushButton.action {
-        background: #313244; color: #A6ADC8; border: none;
-        border-radius: 3px; padding: 3px 10px; font-size: 11px;
-    }
-    QPushButton.action:hover { background: #45475A; }
-    QPushButton.danger {
-        background: #2A1010; color: #CF4444; border: none;
-        border-radius: 3px; padding: 3px 10px; font-size: 11px;
-    }
-    QPushButton.danger:hover { background: #3D1515; }
-    QPushButton#addBtn {
-        background: #CBA6F7; color: #11111B; border: none;
-        border-radius: 4px; padding: 6px 14px; font-size: 12px;
-    }
-    QPushButton#addBtn:hover { background: #B4BEFE; }
-    QPushButton#deleteBtn {
-        background: #2A1010; color: #CF4444; border: none;
-        border-radius: 4px; padding: 6px 14px; font-size: 12px;
-    }
-    QPushButton#deleteBtn:hover { background: #3D1515; }
-    QCheckBox  { color: #A6ADC8; font-size: 11px; }
-    QComboBox  {
-        background: #313244; color: #CDD6F4; border: 1px solid #45475A;
-        border-radius: 4px; padding: 4px 8px; font-size: 12px;
-    }
-)";
-
 GroupManageDialog::GroupManageDialog(GroupInfo* group, const QString& myId,
                                      QList<FriendInfo>& allFriends, QWidget* parent)
     : QDialog(parent), m_group(group), m_myId(myId), m_allFriends(allFriends)
@@ -56,7 +24,7 @@ GroupManageDialog::GroupManageDialog(GroupInfo* group, const QString& myId,
     setModal(true);
     setMinimumWidth(520);
     setMinimumHeight(420);
-    setStyleSheet(BASE_SS);
+    setObjectName("groupManageDialog");   // styled in localcall.qss
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(18, 16, 18, 16);
@@ -65,11 +33,11 @@ GroupManageDialog::GroupManageDialog(GroupInfo* group, const QString& myId,
     // Title row
     auto* titleRow = new QHBoxLayout();
     auto* titleLbl = new QLabel(QString::fromStdString(group->name), this);
-    titleLbl->setStyleSheet("font-size:16px; font-weight:bold; color:#CDD6F4;");
+    titleLbl->setObjectName("dlgTitle");
     QString roleStr = group->isOwner(myId.toStdString()) ? "You are the owner"
                     : group->isHelper(myId.toStdString()) ? "You are a helper" : "Member";
     auto* roleLbl = new QLabel(roleStr, this);
-    roleLbl->setStyleSheet("color:#A6ADC8; font-size:12px;");
+    roleLbl->setObjectName("dlgSubtitle");
     titleRow->addWidget(titleLbl);
     titleRow->addStretch();
     titleRow->addWidget(roleLbl);
@@ -217,7 +185,8 @@ void GroupManageDialog::rebuild()
 
         QString badge = isOwner ? "  Owner" : isHelper ? "  Helper" : isMe ? "  (you)" : "";
         auto* nameLbl = new QLabel(QString::fromStdString(friend_->name) + badge, row);
-        nameLbl->setStyleSheet(QString("color:%1; font-size:13px;").arg(isMe ? "#CBA6F7" : "#CDD6F4"));
+        nameLbl->setObjectName("memberName");
+        UiTheme::setClass(nameLbl, isMe ? "me" : "other");
         rowLayout->addWidget(nameLbl, 1);
 
         if (canAct) {

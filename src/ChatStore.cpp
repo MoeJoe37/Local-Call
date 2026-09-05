@@ -80,6 +80,8 @@ ChatMessage ChatStore::toMessage(const StoredMessage& s)
     else if (s.kind == "Image")     m.kind = MessageKind::Image;
     else if (s.kind == "File")      m.kind = MessageKind::File;
     else if (s.kind == "VoiceNote") m.kind = MessageKind::VoiceNote;
+    else if (s.kind == "System")    m.kind = MessageKind::System;
+    else if (s.kind == "CallEvent") m.kind = MessageKind::CallEvent;
     else                            m.kind = MessageKind::Text;
 
     m.fromId    = s.fromId;
@@ -89,6 +91,9 @@ ChatMessage ChatStore::toMessage(const StoredMessage& s)
     m.mime      = s.mime;
     m.isMine    = s.isMine;
     m.timestamp = s.ts;
+    m.replyToTs    = s.replyToTs;
+    m.replyName    = s.replyName;
+    m.replySnippet = s.replySnippet;
     if (!s.data.empty()) m.data = Helpers::base64Decode(s.data);
     return m;
 }
@@ -101,6 +106,8 @@ StoredMessage ChatStore::toStored(const ChatMessage& m)
         case MessageKind::Image:     s.kind = "Image";     break;
         case MessageKind::File:      s.kind = "File";      break;
         case MessageKind::VoiceNote: s.kind = "VoiceNote"; break;
+        case MessageKind::System:    s.kind = "System";    break;
+        case MessageKind::CallEvent: s.kind = "CallEvent"; break;
         default:                     s.kind = "Text";      break;
     }
     s.fromId   = m.fromId;
@@ -110,6 +117,9 @@ StoredMessage ChatStore::toStored(const ChatMessage& m)
     s.mime     = m.mime;
     s.isMine   = m.isMine;
     s.ts       = m.timestamp;
+    s.replyToTs    = m.replyToTs;
+    s.replyName    = m.replyName;
+    s.replySnippet = m.replySnippet;
     if (!m.data.empty()) s.data = Helpers::base64Encode(m.data);
     return s;
 }

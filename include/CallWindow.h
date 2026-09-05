@@ -1,30 +1,52 @@
 #pragma once
 
 #include <QDialog>
-#include <QCloseEvent>
-#include <QString>
-#include <QList>
-#include <QComboBox>
-#include <QLabel>
 #include <QImage>
-#include <QUuid>
+#include <QString>
+#include <QWidget>
+
+#include "CallSession.h"
+#include "CallStats.h"
 #include "CallTypes.h"
 #include "SigMsg.h"
 
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
-#include "MediaWorker.h"
-#endif
-#ifdef HAS_WEBRTC
-#include "RtcPeer.h"
-#include "MediaPipeline.h"
-#include "UdpMediaPeer.h"
-#include "MediaTcpPeer.h"
-#endif
-
-class QPushButton;
 class QCheckBox;
+class QComboBox;
+class QLabel;
+class QPushButton;
 class QTimer;
 
+/// Video output that paints its frame directly.
+///
+/// The old call window pushed every frame through QLabel::setPixmap with a
+/// smooth-scaled QPixmap, which allocated a full-size pixmap 30 times a second.
+/// Painting in paintEvent scales only what is actually shown, and only when the
+/// widget is actually visible.
+class VideoSurface : public QWidget {
+    Q_OBJECT
+public:
+    explicit VideoSurface(QWidget* parent = nullptr);
+
+    void setFrame(const QImage& frame);
+    void clearFrame();
+    void setPlaceholder(const QString& text);
+    void setFastScaling(bool fast) { m_fastScaling = fast; }
+    bool hasFrame() const { return !m_frame.isNull(); }
+
+signals:
+    void doubleClicked();
+
+protected:
+    void paintEvent(QPaintEvent* e) override;
+    void mouseDoubleClickEvent(QMouseEvent* e) override;
+
+private:
+    QImage  m_frame;
+    QString m_placeholder;
+    bool    m_fastScaling{false};
+};
+
+/// The call UI. All media work lives in CallSession; this class only shows it.
 class CallWindow : public QDialog {
     Q_OBJECT
 public:
@@ -35,10 +57,15 @@ public:
     ~CallWindow() override;
 
     void doClose();
+    /// Kept so signalling stays source-compatible; the LAN media path does not
+    /// use ICE, and WebRTC signalling is ignored unless it is compiled in.
     void handleRtcSignal(const SigMsg& msg);
 
 protected:
     void closeEvent(QCloseEvent* e) override;
+    void resizeEvent(QResizeEvent* e) override;
+    void mouseMoveEvent(QMouseEvent* e) override;
+    void keyPressEvent(QKeyEvent* e) override;
 
 signals:
     void hangupRequested();
@@ -49,62 +76,61 @@ private slots:
     void onCamera();
     void onScreen();
     void onHangup();
-    void onScreenAudioChanged(int state);
+    void onToggleStats();
+    void onScreenAudioChanged(bool on);
     void onQualityChanged();
-    void onMediaConnected();
+    void onSessionState(CallSession::State state);
+    void onStats(CallStats stats);
     void onRemoteFrame(QImage frame);
     void onLocalFrame(QImage frame);
-    void pollPing();
+    void onTick();
+    void onHideControls();
 
 private:
-    void startMedia();
-    void stopMedia();
-    SigMsg makeRtcSignal(const std::string& type) const;
+    void buildUi();
+    void startSession();
+    void layoutSelfView();
+    void setFullScreenMode(bool on);
+    void showControls();
+    void updateButtonStates();
 
-    QString       m_peerIp;
-    QString       m_peerName;
-    CallMode      m_mode;
-    QString       m_myId;
-    QString       m_myName;
-    bool          m_initiator = false;
-    QString       m_rtcSessionId;
+    QString  m_peerIp;
+    QString  m_peerName;
+    CallMode m_mode;
+    QString  m_myId;
+    QString  m_myName;
+    bool     m_initiator{false};
 
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
-    QList<MediaWorker*> m_workers;
-    MediaWorker*        m_audioSender = nullptr;
-    MediaWorker*        m_videoSender = nullptr;
-#endif
+    CallSession* m_session{nullptr};
 
-#ifdef HAS_WEBRTC
-    RtcPeer*       m_rtcPeer = nullptr;
-    UdpMediaPeer*  m_udpPeer = nullptr;
-    MediaTcpPeer*  m_tcpPeer = nullptr;
-    MediaPipeline* m_pipeline = nullptr;
-    bool           m_useRtcMedia = false;
-#endif
+    VideoSurface* m_remoteView{nullptr};
+    VideoSurface* m_selfView{nullptr};
 
-    // UI elements
-    QLabel*      m_remoteVideo    = nullptr;
-    QLabel*      m_localVideo     = nullptr;
-    QLabel*      m_statusLabel    = nullptr;
-    QLabel*      m_pingLabel      = nullptr;
-    QLabel*      m_overlayLabel   = nullptr;
-    QPushButton* m_btnMute        = nullptr;
-    QPushButton* m_btnCamera      = nullptr;
-    QPushButton* m_btnScreen      = nullptr;
-    QCheckBox*   m_chkScreenAudio = nullptr;
-    QWidget*     m_screenAudioPanel = nullptr;
+    QWidget* m_header{nullptr};
+    QLabel*  m_titleLabel{nullptr};
+    QLabel*  m_secureLabel{nullptr};
+    QLabel*  m_timerLabel{nullptr};
+    QLabel*  m_transportBadge{nullptr};
+    QLabel*  m_statusLabel{nullptr};
+    QLabel*  m_statsOverlay{nullptr};
 
-    QWidget*   m_qualityPanel = nullptr;
-    QComboBox* m_cmbRes       = nullptr;
-    QComboBox* m_cmbFps       = nullptr;
-    QComboBox* m_cmbQuality   = nullptr;
-    QLabel*    m_lblQuality   = nullptr;
+    QWidget*     m_controls{nullptr};
+    QPushButton* m_btnMute{nullptr};
+    QPushButton* m_btnCamera{nullptr};
+    QPushButton* m_btnScreen{nullptr};
+    QPushButton* m_btnStats{nullptr};
+    QPushButton* m_btnHangup{nullptr};
+    QCheckBox*   m_chkScreenAudio{nullptr};
+    QComboBox*   m_cmbRes{nullptr};
+    QComboBox*   m_cmbFps{nullptr};
+    QWidget*     m_qualityPanel{nullptr};
 
-    bool m_muted    = false;
-    bool m_screenOn = false;
-    bool m_cameraOn = true;
-    bool m_closing  = false;
-    QTimer* m_pingTimer = nullptr;
-    bool m_pingInFlight = false;
+    QTimer* m_tickTimer{nullptr};
+    QTimer* m_hideTimer{nullptr};
+
+    bool m_muted{false};
+    bool m_cameraOn{false};
+    bool m_screenOn{false};
+    bool m_closing{false};
+    bool m_fullScreen{false};
 };

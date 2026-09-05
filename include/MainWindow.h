@@ -23,7 +23,7 @@ class NotificationWindow;
 #ifdef HAS_MULTIMEDIA
 #include "VoiceNoteRecorder.h"
 #endif
-#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#ifdef HAS_MEDIA_AUDIO
 #include "CallWindow.h"
 #endif
 
@@ -36,22 +36,8 @@ class QScrollArea;
 class QWidget;
 class QProgressBar;
 class QTimer;
-
-// ──────────────────────────────────────────────────────────────────────────
-// Custom event filter to handle list widget viewport resize events
-// ──────────────────────────────────────────────────────────────────────────
-class ListWidgetResizeFilter : public QObject {
-public:
-    explicit ListWidgetResizeFilter(QListWidget* list, QObject* parent = nullptr)
-        : QObject(parent), m_list(list) {}
-    
-    bool eventFilter(QObject* obj, QEvent* event) override;
-
-private:
-    QListWidget* m_list;
-    void recalculateMessageLayout();
-    void updateBubbleTextWidth(QWidget* bubble, int bubbleW);
-};
+class ChatView;
+class ChatComposer;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -79,20 +65,20 @@ private slots:
     void onSignalReceived(SigMsg msg, QString ip);
 
     // Chat send
-    void onChatSend();
     void onChatSendFile();
     void onChatSendImage();
     void onVoiceNotePress();
     void onVoiceNoteRelease();
+    void onVoiceNoteCancel();
     void onChatVoiceCall();
     void onChatVideoCall();
 
     // Group send
-    void onGroupSend();
     void onGroupSendFile();
     void onGroupSendImage();
     void onGroupVoiceNotePress();
     void onGroupVoiceNoteRelease();
+    void onGroupVoiceNoteCancel();
     void onGroupVoiceCall();
 
     // Friend requests
@@ -159,10 +145,11 @@ private:
     void rebuildGroupsList();
     void rebuildPeersList();
     void rebuildRequestsList();
-    void appendChatMsg(const ChatMessage& cm, bool isMine);
-    void appendGroupMsg(const ChatMessage& cm, bool isMine);
-    void scrollChatToBottom();
-    void scrollGroupChatToBottom();
+    /// Sends the composer's current text to the active 1:1 / group conversation.
+    void sendChatText(const QString& text, int64_t replyToTs,
+                      const QString& replyName, const QString& replySnippet);
+    void sendGroupText(const QString& text, int64_t replyToTs,
+                       const QString& replyName, const QString& replySnippet);
     void showToast(const QString& title, const QString& body);
     ChatMessage sigToMessage(const SigMsg& sig, bool isMine) const;
     SigMsg buildSig(const std::string& type) const;
@@ -241,7 +228,7 @@ private:
 #endif
 
     // Call window
-#if defined(HAS_WEBRTC) || defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
+#ifdef HAS_MEDIA_AUDIO
     CallWindow* m_callWin = nullptr;
 #else
     void* m_callWin = nullptr;
@@ -270,21 +257,15 @@ private:
     QLabel*      m_chatStatusDot      = nullptr;
     QLabel*      m_chatPingLabel      = nullptr;
     QWidget*     m_chatReadOnlyBanner = nullptr;
-    QWidget*     m_chatToolbar        = nullptr;
-    QWidget*     m_chatInputBar       = nullptr;
-    QListWidget* m_chatMsgList        = nullptr;
-    QLineEdit*   m_chatInput          = nullptr;
+    ChatView*     m_chatView          = nullptr;
+    ChatComposer* m_chatComposer      = nullptr;
     QPushButton* m_btnChatVoice       = nullptr;
     QPushButton* m_btnChatVideo       = nullptr;
     QPushButton* m_btnChatScreen      = nullptr;
-    QLabel*      m_lblRecording       = nullptr;
-    QLabel*      m_lblChatStatus      = nullptr;  // "typing…" / "uploading…"
-    QProgressBar* m_chatUploadBar     = nullptr;  // outgoing upload progress
 
-    QWidget*     m_panelGroup         = nullptr;
-    QLabel*      m_groupName          = nullptr;
-    QListWidget* m_groupMsgList       = nullptr;
-    QLineEdit*   m_groupInput         = nullptr;
-    QListWidget* m_grpMemberList      = nullptr;
-    QLabel*      m_lblGrpRecording    = nullptr;
+    QWidget*      m_panelGroup        = nullptr;
+    QLabel*       m_groupName         = nullptr;
+    ChatView*     m_groupView         = nullptr;
+    ChatComposer* m_groupComposer     = nullptr;
+    QListWidget*  m_grpMemberList     = nullptr;
 };

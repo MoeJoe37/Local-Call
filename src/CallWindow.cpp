@@ -1,657 +1,578 @@
 #include "CallWindow.h"
-#include "MediaSettings.h"
-#include "Helpers.h"
 
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QGridLayout>
-#include <QLabel>
-#include <QPushButton>
+#include "MediaSettings.h"
+#include "UiTheme.h"
+
 #include <QCheckBox>
-#include <QComboBox>
 #include <QCloseEvent>
+#include <QComboBox>
+#include <QHBoxLayout>
+#include <QKeyEvent>
+#include <QLabel>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPushButton>
 #include <QTimer>
-#include <QPixmap>
-#include <QByteArray>
-#include <QSizePolicy>
-#include <QMessageBox>
-#include <QIcon>
-#include <QTimer>
-#include <QElapsedTimer>
-#include <QTcpSocket>
-#include <QSharedPointer>
+#include <QVBoxLayout>
 #include <QtGlobal>
 
-#ifdef HAS_WEBRTC
-#include <QProcessEnvironment>
-#endif
-
 namespace {
-static QIcon lcIcon(const QString& name) {
-    return QIcon(QStringLiteral(":/icons/") + name + QStringLiteral(".png"));
-}
 
-static void applyIcon(QPushButton* button, const QString& iconName, int px = 18) {
-    if (!button) return;
-    button->setIcon(lcIcon(iconName));
-    button->setIconSize(QSize(px, px));
-}
+/// Display order for the resolution picker. MediaSettings::Resolutions is a
+/// std::map, so iterating it would sort "1080p" before "144p".
+const char* const kResolutionOrder[] = {"144p", "240p", "360p", "480p", "720p", "1080p", "Source"};
 
-#ifdef HAS_WEBRTC
-std::vector<std::string> iceServersFromEnvironment()
+QString formatDuration(qint64 ms)
 {
-    // Comma-separated, for example:
-    // LOCALCALL_ICE_SERVERS="stun:stun.l.google.com:19302,turn:user:pass@turn.example.com:3478"
-    std::vector<std::string> out;
-    const QByteArray raw = qgetenv("LOCALCALL_ICE_SERVERS");
-    if (!raw.trimmed().isEmpty()) {
-        for (const QByteArray& item : raw.split(',')) {
-            const QByteArray v = item.trimmed();
-            if (!v.isEmpty()) out.emplace_back(v.constData());
-        }
-    }
-    if (out.empty()) out.emplace_back("stun:stun.l.google.com:19302");
-    return out;
-}
-#endif
+    const qint64 total = ms / 1000;
+    const qint64 h = total / 3600;
+    const qint64 m = (total / 60) % 60;
+    const qint64 s = total % 60;
+    return h > 0 ? QString::asprintf("%lld:%02lld:%02lld", h, m, s)
+                 : QString::asprintf("%02lld:%02lld", m, s);
 }
 
-CallWindow::CallWindow(const QString& peerIp, const QString& peerName,
-                       CallMode mode, const QString& myId, const QString& myName,
-                       bool initiator,
-                       QWidget* parent)
-    : QDialog(parent, Qt::Window), m_peerIp(peerIp), m_peerName(peerName),
-      m_mode(mode), m_myId(myId), m_myName(myName), m_initiator(initiator),
-      m_rtcSessionId(QUuid::createUuid().toString(QUuid::WithoutBraces))
+/// Rough bitrate budget for a picture size and frame rate. Keeps 360p30 near
+/// 600 kbit/s and 720p30 near 2 Mbit/s, which a LAN link handles comfortably
+/// while leaving headroom for audio.
+int bitrateFor(const QSize& size, float fps)
 {
-    setWindowTitle(QString("Secure call with %1").arg(peerName));
-    setMinimumSize(520, 420);
-    setAttribute(Qt::WA_DeleteOnClose);
-
-    setStyleSheet(R"(
-        QDialog { background: #1E1E2E; }
-        QLabel  { color: #CDD6F4; }
-        QLabel#status { color: #A6E3A1; font-size: 13px; }
-        QLabel#overlay { color: #CDD6F4; font-size: 16px; background: rgba(0,0,0,160);
-                         padding: 12px 20px; border-radius: 8px; }
-        QLabel#remote { background: #181825; border-radius: 6px; }
-        QLabel#local  { background: #1E1E2E; border-radius: 4px; }
-        QPushButton {
-            background: #313244; color: #CDD6F4; border: none;
-            border-radius: 6px; padding: 8px 18px; font-size: 13px;
-        }
-        QPushButton:hover { background: #45475A; }
-        QPushButton#hangup { background: #E64553; color: white; }
-        QPushButton#hangup:hover { background: #C73C48; }
-        QCheckBox { color: #CDD6F4; font-size: 12px; }
-    )");
-
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0,0,0,0);
-    root->setSpacing(0);
-
-    auto* videoStack = new QWidget(this);
-    videoStack->setMinimumHeight(280);
-    auto* vl = new QGridLayout(videoStack);
-    vl->setContentsMargins(0,0,0,0);
-    vl->setSpacing(0);
-
-    m_remoteVideo = new QLabel(videoStack);
-    m_remoteVideo->setObjectName("remote");
-    m_remoteVideo->setAlignment(Qt::AlignCenter);
-    m_remoteVideo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    vl->addWidget(m_remoteVideo, 0, 0);
-
-    m_overlayLabel = new QLabel("Starting LAN media…", videoStack);
-    m_overlayLabel->setObjectName("overlay");
-    m_overlayLabel->setAlignment(Qt::AlignCenter);
-    vl->addWidget(m_overlayLabel, 0, 0, Qt::AlignCenter);
-
-    m_localVideo = new QLabel(videoStack);
-    m_localVideo->setObjectName("local");
-    m_localVideo->setFixedSize(160, 120);
-    m_localVideo->setAlignment(Qt::AlignCenter);
-    m_localVideo->setText("Local preview");
-    m_localVideo->setStyleSheet("background:#11111B;border:1px solid #45475A;border-radius:8px;color:#6C7086;font-size:11px;");
-    vl->addWidget(m_localVideo, 0, 0, Qt::AlignRight | Qt::AlignBottom);
-
-    if (mode == CallMode::Voice) {
-        m_remoteVideo->setVisible(false);
-        m_localVideo->setVisible(false);
-        m_overlayLabel->setText("Voice call connecting…");
-    }
-    root->addWidget(videoStack);
-
-    auto* infoBar = new QHBoxLayout();
-    infoBar->setContentsMargins(12,8,12,4);
-    auto* callIcon = new QLabel(this);
-    callIcon->setPixmap(lcIcon("lock").pixmap(16, 16));
-    auto* callWith = new QLabel(peerName, this);
-    callWith->setStyleSheet("font-size:14px;font-weight:bold;color:#CDD6F4;");
-    m_statusLabel = new QLabel("Media connecting…", this);
-    m_statusLabel->setObjectName("status");
-    m_pingLabel = new QLabel("Ping --", this);
-    m_pingLabel->setStyleSheet("color:#A6ADC8;font-size:11px;background:#181825;border:1px solid #313244;border-radius:10px;padding:3px 8px;");
-    infoBar->addWidget(callIcon);
-    infoBar->addWidget(callWith);
-    infoBar->addStretch();
-    infoBar->addWidget(m_pingLabel);
-    infoBar->addWidget(m_statusLabel);
-    root->addLayout(infoBar);
-
-    m_screenAudioPanel = new QWidget(this);
-    auto* saRow = new QHBoxLayout(m_screenAudioPanel);
-    saRow->setContentsMargins(12,0,12,0);
-    m_chkScreenAudio = new QCheckBox("Include microphone audio", this);
-    m_chkScreenAudio->setChecked(true);
-    saRow->addWidget(m_chkScreenAudio);
-    saRow->addStretch();
-    m_screenAudioPanel->setVisible(mode == CallMode::VideoScreen);
-    root->addWidget(m_screenAudioPanel);
-
-    m_qualityPanel = new QWidget(this);
-    m_qualityPanel->setStyleSheet("background:#1E1E2E;border-top:1px solid #313244;padding:4px 0;");
-    auto* qRow = new QHBoxLayout(m_qualityPanel);
-    qRow->setContentsMargins(12,6,12,6);
-    qRow->setSpacing(12);
-
-    auto* lblRes = new QLabel("Res:", m_qualityPanel);
-    lblRes->setStyleSheet("color:#A6ADC8;font-size:11px;");
-    m_cmbRes = new QComboBox(m_qualityPanel);
-    m_cmbRes->setStyleSheet("background:#313244;color:#CDD6F4;border:none;border-radius:3px;padding:2px 6px;font-size:11px;");
-    for (const auto& [name, _] : MediaSettings::Resolutions)
-        m_cmbRes->addItem(QString::fromStdString(name));
-    m_cmbRes->setCurrentText("360p");
-
-    auto* lblFps = new QLabel("FPS:", m_qualityPanel);
-    lblFps->setStyleSheet("color:#A6ADC8;font-size:11px;");
-    m_cmbFps = new QComboBox(m_qualityPanel);
-    m_cmbFps->setStyleSheet("background:#313244;color:#CDD6F4;border:none;border-radius:3px;padding:2px 6px;font-size:11px;");
-    for (const auto& f : MediaSettings::FpsOptions)
-        m_cmbFps->addItem(QString::fromStdString(f));
-    m_cmbFps->setCurrentText("30");
-
-    auto* lblQ = new QLabel("Bitrate bias:", m_qualityPanel);
-    lblQ->setStyleSheet("color:#A6ADC8;font-size:11px;");
-    m_cmbQuality = new QComboBox(m_qualityPanel);
-    m_cmbQuality->setStyleSheet("background:#313244;color:#CDD6F4;border:none;border-radius:3px;padding:2px 6px;font-size:11px;");
-    for (int q = 10; q <= 100; q += 10)
-        m_cmbQuality->addItem(QString::number(q), q);
-    m_cmbQuality->setCurrentText("60");
-    m_lblQuality = new QLabel("60", m_qualityPanel);
-    m_lblQuality->setStyleSheet("color:#CDD6F4;font-size:11px;min-width:24px;");
-
-    qRow->addWidget(lblRes);
-    qRow->addWidget(m_cmbRes);
-    qRow->addWidget(lblFps);
-    qRow->addWidget(m_cmbFps);
-    qRow->addWidget(lblQ);
-    qRow->addWidget(m_cmbQuality);
-    qRow->addWidget(m_lblQuality);
-    qRow->addStretch();
-    m_qualityPanel->setVisible(mode != CallMode::Voice);
-    root->addWidget(m_qualityPanel);
-
-    auto* ctrlBar = new QHBoxLayout();
-    ctrlBar->setContentsMargins(12,8,12,12);
-    ctrlBar->setSpacing(8);
-
-    m_btnMute   = new QPushButton("Mute",   this);
-    m_btnCamera = new QPushButton("Camera", this);
-    m_btnScreen = new QPushButton("Screen", this);
-    auto* btnHangup = new QPushButton("Hang up", this);
-    applyIcon(m_btnMute, "voice", 18);
-    applyIcon(m_btnCamera, "video", 18);
-    applyIcon(m_btnScreen, "screen", 18);
-    applyIcon(btnHangup, "hangup", 18);
-    btnHangup->setObjectName("hangup");
-
-    m_btnCamera->setEnabled(mode != CallMode::Voice);
-    m_btnScreen->setEnabled(mode != CallMode::Voice);
-
-    ctrlBar->addWidget(m_btnMute);
-    ctrlBar->addWidget(m_btnCamera);
-    ctrlBar->addWidget(m_btnScreen);
-    ctrlBar->addStretch();
-    ctrlBar->addWidget(btnHangup);
-    root->addLayout(ctrlBar);
-
-    connect(m_btnMute,        &QPushButton::clicked,     this, &CallWindow::onMute);
-    connect(m_btnCamera,      &QPushButton::clicked,     this, &CallWindow::onCamera);
-    connect(m_btnScreen,      &QPushButton::clicked,     this, &CallWindow::onScreen);
-    connect(btnHangup,        &QPushButton::clicked,     this, &CallWindow::onHangup);
-    connect(m_chkScreenAudio, &QCheckBox::stateChanged,  this, &CallWindow::onScreenAudioChanged);
-    connect(m_cmbRes,  QOverload<int>::of(&QComboBox::currentIndexChanged), this, &CallWindow::onQualityChanged);
-    connect(m_cmbFps,  QOverload<int>::of(&QComboBox::currentIndexChanged), this, &CallWindow::onQualityChanged);
-    connect(m_cmbQuality, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int){
-        if (m_lblQuality) m_lblQuality->setText(m_cmbQuality->currentText());
-        onQualityChanged();
-    });
-
-    startMedia();
-
-    m_pingTimer = new QTimer(this);
-    m_pingTimer->setInterval(2000);
-    connect(m_pingTimer, &QTimer::timeout, this, &CallWindow::pollPing);
-    m_pingTimer->start();
-    QTimer::singleShot(250, this, &CallWindow::pollPing);
+    const qint64 pixels = qint64(size.width()) * size.height();
+    const qint64 raw    = qint64(pixels * qMax(1.0f, fps)) / 12;
+    return int(qBound<qint64>(200000LL, raw, 4000000LL));
 }
 
-CallWindow::~CallWindow() { stopMedia(); }
+}  // namespace
 
-SigMsg CallWindow::makeRtcSignal(const std::string& type) const
+// ── VideoSurface ─────────────────────────────────────────────────────────────
+
+VideoSurface::VideoSurface(QWidget* parent) : QWidget(parent)
 {
-    SigMsg sig;
-    sig.protocol = LocalCallProtocol::Name;
-    sig.schema = LocalCallProtocol::Schema;
-#ifdef LOCALCALL_VERSION
-    sig.app_version = LOCALCALL_VERSION;
-#endif
-#if defined(Q_OS_WIN)
-    sig.platform = "windows";
-#elif defined(Q_OS_MACOS)
-    sig.platform = "macos";
-#elif defined(Q_OS_LINUX)
-    sig.platform = "linux";
-#elif defined(Q_OS_ANDROID)
-    sig.platform = "android";
-#else
-    sig.platform = "unknown";
-#endif
-    sig.type = type;
-    sig.from_id = m_myId.toStdString();
-    sig.from_name = m_myName.toStdString();
-    sig.rtc_session_id = m_rtcSessionId.toStdString();
-    sig.transport = "webrtc-dtls-srtp";
-    sig.ts = Helpers::nowMs();
-    return sig;
+    setAttribute(Qt::WA_OpaquePaintEvent);
+    setMinimumSize(160, 90);
 }
 
-void CallWindow::onQualityChanged()
+void VideoSurface::setFrame(const QImage& frame)
 {
-    if (m_lblQuality && m_cmbQuality) m_lblQuality->setText(m_cmbQuality->currentText());
-
-    QSize targetSize;
-    QString resName = m_cmbRes ? m_cmbRes->currentText() : QStringLiteral("360p");
-    auto it = MediaSettings::Resolutions.find(resName.toStdString());
-    if (it != MediaSettings::Resolutions.end() && it->second.has_value())
-        targetSize = QSize(it->second->w, it->second->h);
-
-    QString fpsStr = m_cmbFps ? m_cmbFps->currentText() : QStringLiteral("30");
-    float fps = (fpsStr == "Source") ? 30.0f : qMax(1, fpsStr.toInt());
-
-    const int quality = m_cmbQuality ? m_cmbQuality->currentData().toInt() : 60;
-    const int bitrate = qMax(128000, quality * 16000);
-
-#ifdef HAS_WEBRTC
-    if (m_pipeline)
-        m_pipeline->setVideoTarget(targetSize, fps, bitrate);
-#endif
-
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
-    if (!m_videoSender) return;
-    if (it != MediaSettings::Resolutions.end()) {
-        if (it->second.has_value())
-            m_videoSender->targetRes = std::make_pair(it->second->w, it->second->h);
-        else
-            m_videoSender->targetRes = std::nullopt;
-    }
-    if (fpsStr == "Source") m_videoSender->targetFps = 999;
-    else                    m_videoSender->targetFps = fpsStr.toInt();
-    m_videoSender->jpegQuality.store(quality);
-#endif
+    m_frame = frame;
+    update();
 }
 
-void CallWindow::startMedia()
+void VideoSurface::clearFrame()
 {
-#ifdef HAS_WEBRTC
-    // Default to the deterministic LAN media path. It uses the already-opened
-    // firewall fixed UDP ports and avoids the Windows/libdatachannel ICE cases
-    // that made calls connect on one PC but carry no media on another. WebRTC
-    // can still be enabled explicitly for testing with LOCALCALL_ENABLE_WEBRTC_MEDIA=1.
-    m_useRtcMedia = qEnvironmentVariableIsSet("LOCALCALL_ENABLE_WEBRTC_MEDIA");
+    m_frame = QImage();
+    update();
+}
 
-    if (m_useRtcMedia) {
-        RtcConfig cfg;
-        const auto envIce = iceServersFromEnvironment();
-        cfg.localNetworkOnly = qgetenv("LOCALCALL_ICE_SERVERS").trimmed().isEmpty();
-        if (!cfg.localNetworkOnly) cfg.iceServers = envIce;
+void VideoSurface::setPlaceholder(const QString& text)
+{
+    m_placeholder = text;
+    update();
+}
 
-        m_rtcPeer = new RtcPeer(m_myId, m_peerName, cfg, this);
-        connect(m_rtcPeer, &RtcPeer::localDescriptionReady, this, [this](QString type, QString sdp) {
-            SigMsg sig = makeRtcSignal(type == "answer" ? SigType::RtcAnswer : SigType::RtcOffer);
-            sig.sdp_type = type.toStdString();
-            sig.sdp = sdp.toStdString();
-            emit rtcSignalReady(sig);
-        });
-        connect(m_rtcPeer, &RtcPeer::localCandidateReady, this, [this](QString candidate, QString mid, int mline) {
-            SigMsg sig = makeRtcSignal(SigType::RtcIce);
-            sig.candidate = candidate.toStdString();
-            sig.candidate_mid = mid.toStdString();
-            sig.candidate_mline = mline;
-            emit rtcSignalReady(sig);
-        });
-        connect(m_rtcPeer, &RtcPeer::connected, this, &CallWindow::onMediaConnected);
-        connect(m_rtcPeer, &RtcPeer::failed, this, [this]() {
-            m_statusLabel->setText("RTC failed");
-            m_statusLabel->setStyleSheet("color:#F38BA8;font-size:13px;");
-            m_overlayLabel->setText("RTC failed. LAN media is recommended on local networks.");
-            m_overlayLabel->setVisible(true);
-        });
-    }
+void VideoSurface::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.fillRect(rect(), QColor(0x0B, 0x0B, 0x12));
 
-    EncoderSettings settings;
-    settings.width = 640;
-    settings.height = 360;
-    settings.fps = 30.0f;
-    settings.bitrate = 800000;
-    settings.opusBitrate = 32000;
-    if (m_mode == CallMode::Voice) {
-        settings.bitrate = 1;
-        settings.videoEnabled = false;
-    }
-
-    m_pipeline = new MediaPipeline(settings, this);
-
-    // Default media path: a persistent TCP media channel. It uses one fixed,
-    // firewall-opened port and avoids the packet loss / NAT loopback problems
-    // that made the old UDP fallback appear connected while carrying no audio
-    // or video on some Windows 11 machines.  UDP remains available only for
-    // explicit testing with LOCALCALL_ENABLE_UDP_MEDIA=1.
-    const bool useUdpMedia = qEnvironmentVariableIsSet("LOCALCALL_ENABLE_UDP_MEDIA") && !m_useRtcMedia;
-
-    if (m_rtcPeer && m_useRtcMedia) {
-        connect(m_pipeline, &MediaPipeline::encodedVideoFrame, m_rtcPeer, &RtcPeer::sendVideoFrame, Qt::QueuedConnection);
-        connect(m_pipeline, &MediaPipeline::encodedAudioFrame, m_rtcPeer, &RtcPeer::sendAudioFrame, Qt::QueuedConnection);
-        connect(m_rtcPeer, &RtcPeer::remoteVideoFrame, m_pipeline, &MediaPipeline::onRemoteVideoFrame, Qt::QueuedConnection);
-        connect(m_rtcPeer, &RtcPeer::remoteAudioFrame, m_pipeline, &MediaPipeline::onRemoteAudioFrame, Qt::QueuedConnection);
-    } else if (useUdpMedia) {
-        m_udpPeer = new UdpMediaPeer(m_peerIp, m_myId, this);
-        connect(m_pipeline, &MediaPipeline::encodedVideoFrame, m_udpPeer, &UdpMediaPeer::sendVideoFrame, Qt::QueuedConnection);
-        connect(m_pipeline, &MediaPipeline::encodedAudioFrame, m_udpPeer, &UdpMediaPeer::sendAudioFrame, Qt::QueuedConnection);
-        connect(m_udpPeer, &UdpMediaPeer::remoteVideoFrame, m_pipeline, &MediaPipeline::onRemoteVideoFrame, Qt::QueuedConnection);
-        connect(m_udpPeer, &UdpMediaPeer::remoteAudioFrame, m_pipeline, &MediaPipeline::onRemoteAudioFrame, Qt::QueuedConnection);
-        connect(m_udpPeer, &UdpMediaPeer::connected, this, &CallWindow::onMediaConnected, Qt::QueuedConnection);
-        connect(m_udpPeer, &UdpMediaPeer::failed, this, [this](const QString& reason) {
-            m_statusLabel->setText("UDP media failed");
-            m_statusLabel->setStyleSheet("color:#F38BA8;font-size:13px;");
-            m_overlayLabel->setText(reason);
-            m_overlayLabel->setVisible(true);
-        });
-        if (!m_udpPeer->start()) {
-            m_overlayLabel->setText("Could not start UDP media sockets.");
-            m_statusLabel->setText("Media failed");
-        }
-    } else {
-        m_tcpPeer = new MediaTcpPeer(m_peerIp, this);
-        connect(m_pipeline, &MediaPipeline::encodedVideoFrame, m_tcpPeer, &MediaTcpPeer::sendVideoFrame, Qt::QueuedConnection);
-        connect(m_pipeline, &MediaPipeline::encodedAudioFrame, m_tcpPeer, &MediaTcpPeer::sendAudioFrame, Qt::QueuedConnection);
-        connect(m_tcpPeer, &MediaTcpPeer::remoteVideoFrame, m_pipeline, &MediaPipeline::onRemoteVideoFrame, Qt::QueuedConnection);
-        connect(m_tcpPeer, &MediaTcpPeer::remoteAudioFrame, m_pipeline, &MediaPipeline::onRemoteAudioFrame, Qt::QueuedConnection);
-        connect(m_tcpPeer, &MediaTcpPeer::connected, this, &CallWindow::onMediaConnected, Qt::QueuedConnection);
-        connect(m_tcpPeer, &MediaTcpPeer::failed, this, [this](const QString& reason) {
-            m_statusLabel->setText("TCP media failed");
-            m_statusLabel->setStyleSheet("color:#F38BA8;font-size:13px;");
-            m_overlayLabel->setText(reason);
-            m_overlayLabel->setVisible(true);
-        });
-        if (!m_tcpPeer->start()) {
-            m_overlayLabel->setText("Could not start TCP media channel.");
-            m_statusLabel->setText("Media failed");
-        }
-    }
-
-    connect(m_pipeline, &MediaPipeline::remoteVideoImage, this, &CallWindow::onRemoteFrame, Qt::QueuedConnection);
-    connect(m_pipeline, &MediaPipeline::localVideoImage,  this, &CallWindow::onLocalFrame,  Qt::QueuedConnection);
-    m_pipeline->setMuted(m_muted);
-    m_pipeline->setScreenAudioEnabled(m_chkScreenAudio ? m_chkScreenAudio->isChecked() : true);
-    if (m_mode == CallMode::VideoScreen) {
-        m_screenOn = true;
-        if (m_btnScreen) { m_btnScreen->setText("Stop"); applyIcon(m_btnScreen, "stop", 18); }
-        m_pipeline->setScreenSharing(true);
-    }
-
-    if (!m_pipeline->startCapture()) {
-        m_overlayLabel->setText(m_mode == CallMode::Voice
-                                ? "Could not start microphone capture. Check Windows microphone permission."
-                                : "Could not start microphone/camera capture. Check Windows camera/microphone permission.");
-        m_statusLabel->setText("Capture failed");
-    } else if (!m_useRtcMedia) {
-        m_statusLabel->setText("LAN media ready");
-        m_statusLabel->setStyleSheet("color:#A6E3A1;font-size:13px;");
-        if (m_mode == CallMode::Voice)
-            m_overlayLabel->setText("Voice call connected. Waiting for audio…");
-        else
-            m_overlayLabel->setText("Call connected. Waiting for remote video…");
-    }
-
-    if (m_rtcPeer && m_useRtcMedia && m_initiator) {
-        QTimer::singleShot(150, this, [this]() {
-            if (m_rtcPeer) m_rtcPeer->createOffer();
-        });
-    }
-    return;
-#endif
-
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
-#ifdef HAS_MULTIMEDIA
-    auto* aSend = new MediaWorker(MediaMode::Audio, m_peerIp,
-                                   MediaSettings::MediaAudioPort, false, this);
-    auto* aRecv = new MediaWorker(MediaMode::Audio, {},
-                                   MediaSettings::MediaAudioPort, true, this);
-    connect(aRecv, &MediaWorker::connected, this, &CallWindow::onMediaConnected);
-    m_workers << aSend << aRecv;
-    m_audioSender = aSend;
-#endif
-
-#ifdef HAS_OPENCV
-    if (m_mode != CallMode::Voice) {
-        auto vMode = (m_mode == CallMode::VideoScreen) ? MediaMode::Screen : MediaMode::Camera;
-        auto* vSend = new MediaWorker(vMode, m_peerIp,
-                                       MediaSettings::MediaVideoPort, false, this);
-        auto* vRecv = new MediaWorker(MediaMode::Camera, {},
-                                       MediaSettings::MediaVideoPort, true, this);
-        connect(vRecv, &MediaWorker::frameReceived, this, &CallWindow::onRemoteFrame);
-        connect(vRecv, &MediaWorker::connected,     this, &CallWindow::onMediaConnected);
-        m_workers << vSend << vRecv;
-        m_videoSender = vSend;
-    }
-#endif
-
-#ifdef HAS_MULTIMEDIA
-    if (m_audioSender && m_mode == CallMode::VideoScreen)
-        m_audioSender->muteAudioOnScreen = !m_chkScreenAudio->isChecked();
-#endif
-
-    if (m_workers.isEmpty()) {
-        m_overlayLabel->setText("Media support is not built in this package.");
-        QTimer::singleShot(500, this, &CallWindow::onMediaConnected);
+    if (m_frame.isNull()) {
+        if (m_placeholder.isEmpty()) return;
+        p.setPen(QColor(0x6C, 0x70, 0x86));
+        QFont f = p.font();
+        f.setPointSizeF(qMax(9.0, height() / 26.0));
+        p.setFont(f);
+        p.drawText(rect(), Qt::AlignCenter, m_placeholder);
         return;
     }
 
-    for (auto* w : m_workers) w->start();
-#else
-    m_overlayLabel->setText("Media support is not built in this package.");
-    QTimer::singleShot(500, this, &CallWindow::onMediaConnected);
-#endif
+    // Scale only to the visible size, and only when we actually paint. The
+    // self-view is small and updated constantly, so it uses fast scaling.
+    p.setRenderHint(QPainter::SmoothPixmapTransform, !m_fastScaling);
+    const QSize scaled = m_frame.size().scaled(size(), Qt::KeepAspectRatio);
+    const QRect target(QPoint((width() - scaled.width()) / 2,
+                              (height() - scaled.height()) / 2), scaled);
+    p.drawImage(target, m_frame);
 }
 
-void CallWindow::stopMedia()
+void VideoSurface::mouseDoubleClickEvent(QMouseEvent* e)
 {
-#ifdef HAS_WEBRTC
-    if (m_pipeline) { m_pipeline->stopCapture(); m_pipeline->deleteLater(); m_pipeline = nullptr; }
-    if (m_tcpPeer) { m_tcpPeer->stop(); m_tcpPeer->deleteLater(); m_tcpPeer = nullptr; }
-    if (m_udpPeer) { m_udpPeer->stop(); m_udpPeer->deleteLater(); m_udpPeer = nullptr; }
-    if (m_rtcPeer) { m_rtcPeer->close(); m_rtcPeer->deleteLater(); m_rtcPeer = nullptr; }
-#endif
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
-    for (auto* w : m_workers) { w->stop(); delete w; }
-    m_workers.clear();
-    m_audioSender = nullptr;
-    m_videoSender = nullptr;
-#endif
+    emit doubleClicked();
+    QWidget::mouseDoubleClickEvent(e);
 }
 
-void CallWindow::handleRtcSignal(const SigMsg& msg)
+// ── CallWindow ───────────────────────────────────────────────────────────────
+
+CallWindow::CallWindow(const QString& peerIp, const QString& peerName,
+                       CallMode mode, const QString& myId, const QString& myName,
+                       bool initiator, QWidget* parent)
+    : QDialog(parent)
+    , m_peerIp(peerIp)
+    , m_peerName(peerName)
+    , m_mode(mode)
+    , m_myId(myId)
+    , m_myName(myName)
+    , m_initiator(initiator)
 {
-#ifdef HAS_WEBRTC
-    if (!m_rtcPeer) return;
-    if (msg.type == SigType::RtcOffer || msg.type == SigType::RtcAnswer) {
-        if (msg.sdp && msg.sdp_type)
-            m_rtcPeer->setRemoteDescription(QString::fromStdString(*msg.sdp_type),
-                                            QString::fromStdString(*msg.sdp));
-    } else if (msg.type == SigType::RtcIce) {
-        if (msg.candidate && msg.candidate_mid)
-            m_rtcPeer->addRemoteCandidate(QString::fromStdString(*msg.candidate),
-                                          QString::fromStdString(*msg.candidate_mid),
-                                          msg.candidate_mline.value_or(0));
-    }
-#else
-    Q_UNUSED(msg);
-#endif
+    setObjectName("callWindow");
+    setWindowTitle(tr("Call — %1").arg(peerName));
+    setWindowFlag(Qt::Window, true);
+    setMinimumSize(560, 420);
+    resize(m_mode == CallMode::Voice ? QSize(560, 420) : QSize(960, 640));
+    setMouseTracking(true);
+
+    // A voice call has no camera to begin with. The old window started with
+    // m_cameraOn = true regardless of mode, so the button lied about its state.
+    m_cameraOn = (m_mode == CallMode::VideoCamera);
+    m_screenOn = (m_mode == CallMode::VideoScreen);
+
+    buildUi();
+    startSession();
 }
 
-void CallWindow::pollPing()
+CallWindow::~CallWindow() = default;
+
+void CallWindow::buildUi()
 {
-    if (m_pingInFlight || m_peerIp.isEmpty()) return;
-    m_pingInFlight = true;
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
 
-    auto* socket = new QTcpSocket(this);
-    auto timer = QSharedPointer<QElapsedTimer>::create();
-    auto done = QSharedPointer<bool>::create(false);
-    timer->start();
+    // ── Header ───────────────────────────────────────────────────────────────
+    m_header = new QWidget(this);
+    m_header->setObjectName("callHeader");
+    auto* headerLayout = new QHBoxLayout(m_header);
+    headerLayout->setContentsMargins(16, 10, 16, 10);
+    headerLayout->setSpacing(10);
 
-    auto finish = [this, socket, timer, done](int ms) {
-        if (*done) return;
-        *done = true;
-        m_pingInFlight = false;
-        if (m_pingLabel) {
-            if (ms >= 0) {
-                m_pingLabel->setText(QString("%1 ms").arg(ms));
-                m_pingLabel->setStyleSheet("color:#A6E3A1;font-size:11px;background:#181825;border:1px solid #313244;border-radius:10px;padding:3px 8px;");
-            } else {
-                m_pingLabel->setText("Ping timeout");
-                m_pingLabel->setStyleSheet("color:#F38BA8;font-size:11px;background:#181825;border:1px solid #313244;border-radius:10px;padding:3px 8px;");
-            }
-        }
-        socket->abort();
-        socket->deleteLater();
+    m_titleLabel = new QLabel(m_peerName, m_header);
+    m_titleLabel->setObjectName("callPeerName");
+
+    m_secureLabel = new QLabel(tr("Encrypted"), m_header);
+    m_secureLabel->setObjectName("secureBadge");
+    m_secureLabel->setToolTip(tr("Signalling is signed with your Ed25519 device key."));
+
+    m_transportBadge = new QLabel(tr("connecting"), m_header);
+    m_transportBadge->setObjectName("transportBadge");
+
+    m_timerLabel = new QLabel(QStringLiteral("00:00"), m_header);
+    m_timerLabel->setObjectName("callTimer");
+
+    headerLayout->addWidget(m_titleLabel);
+    headerLayout->addWidget(m_secureLabel);
+    headerLayout->addStretch(1);
+    headerLayout->addWidget(m_transportBadge);
+    headerLayout->addWidget(m_timerLabel);
+    root->addWidget(m_header);
+
+    // ── Video stage ──────────────────────────────────────────────────────────
+    m_remoteView = new VideoSurface(this);
+    m_remoteView->setObjectName("videoStage");
+    m_remoteView->setMouseTracking(true);
+    m_remoteView->setPlaceholder(m_mode == CallMode::Voice
+                                     ? tr("%1\nVoice call").arg(m_peerName)
+                                     : tr("Waiting for video from %1…").arg(m_peerName));
+    connect(m_remoteView, &VideoSurface::doubleClicked, this,
+            [this] { setFullScreenMode(!m_fullScreen); });
+    root->addWidget(m_remoteView, 1);
+
+    m_selfView = new VideoSurface(m_remoteView);
+    m_selfView->setFastScaling(true);
+    m_selfView->setMouseTracking(true);
+    m_selfView->setVisible(m_mode != CallMode::Voice);
+
+    m_statsOverlay = new QLabel(m_remoteView);
+    m_statsOverlay->setObjectName("statsOverlay");
+    m_statsOverlay->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_statsOverlay->setVisible(false);
+
+    m_statusLabel = new QLabel(tr("Connecting…"), m_remoteView);
+    m_statusLabel->setObjectName("callStatus");
+    m_statusLabel->setAlignment(Qt::AlignCenter);
+
+    // ── Controls ─────────────────────────────────────────────────────────────
+    m_controls = new QWidget(this);
+    m_controls->setObjectName("callControls");
+    auto* controlsLayout = new QHBoxLayout(m_controls);
+    controlsLayout->setContentsMargins(16, 12, 16, 12);
+    controlsLayout->setSpacing(12);
+
+    m_qualityPanel = new QWidget(m_controls);
+    m_qualityPanel->setObjectName("qualityPanel");
+    auto* qualityLayout = new QHBoxLayout(m_qualityPanel);
+    qualityLayout->setContentsMargins(0, 0, 0, 0);
+    qualityLayout->setSpacing(6);
+
+    m_cmbRes = new QComboBox(m_qualityPanel);
+    for (const char* name : kResolutionOrder) m_cmbRes->addItem(QString::fromLatin1(name));
+    m_cmbRes->setCurrentText(m_mode == CallMode::VideoScreen ? QStringLiteral("720p")
+                                                             : QStringLiteral("360p"));
+
+    m_cmbFps = new QComboBox(m_qualityPanel);
+    for (const std::string& fps : MediaSettings::FpsOptions)
+        m_cmbFps->addItem(QString::fromStdString(fps));
+    m_cmbFps->setCurrentText(QStringLiteral("30"));
+
+    qualityLayout->addWidget(new QLabel(tr("Quality"), m_qualityPanel));
+    qualityLayout->addWidget(m_cmbRes);
+    qualityLayout->addWidget(m_cmbFps);
+    m_qualityPanel->setVisible(m_mode != CallMode::Voice);
+
+    m_chkScreenAudio = new QCheckBox(tr("Share audio"), m_controls);
+    m_chkScreenAudio->setChecked(true);
+
+    auto makeButton = [this](const QString& objectName, const QString& iconName,
+                             const QString& tip, bool checkable) {
+        auto* button = new QPushButton(m_controls);
+        button->setObjectName(objectName);
+        button->setToolTip(tip);
+        button->setCheckable(checkable);
+        button->setCursor(Qt::PointingHandCursor);
+        UiTheme::setClass(button, QStringLiteral("callBtn"));
+        UiTheme::applyIcon(button, iconName, 20);
+        return button;
     };
 
-    connect(socket, &QTcpSocket::connected, this, [finish, timer]() mutable {
-        finish(static_cast<int>(timer->elapsed()));
+    m_btnMute   = makeButton("btnMute",   "voice",  tr("Mute microphone"),   true);
+    m_btnCamera = makeButton("btnCamera", "video",  tr("Turn camera off"),   true);
+    m_btnScreen = makeButton("btnScreen", "screen", tr("Share your screen"), true);
+    m_btnStats  = makeButton("btnStats",  "ping",   tr("Show call statistics"), true);
+
+    m_btnHangup = new QPushButton(m_controls);
+    m_btnHangup->setObjectName("btnHangup");
+    m_btnHangup->setToolTip(tr("End call"));
+    m_btnHangup->setCursor(Qt::PointingHandCursor);
+    UiTheme::applyIcon(m_btnHangup, "hangup", 20);
+
+    controlsLayout->addWidget(m_qualityPanel);
+    controlsLayout->addStretch(1);
+    controlsLayout->addWidget(m_btnMute);
+    controlsLayout->addWidget(m_btnCamera);
+    controlsLayout->addWidget(m_btnScreen);
+    controlsLayout->addWidget(m_btnStats);
+    controlsLayout->addWidget(m_btnHangup);
+    controlsLayout->addStretch(1);
+    controlsLayout->addWidget(m_chkScreenAudio);
+    root->addWidget(m_controls);
+
+    connect(m_btnMute,   &QPushButton::clicked, this, &CallWindow::onMute);
+    connect(m_btnCamera, &QPushButton::clicked, this, &CallWindow::onCamera);
+    connect(m_btnScreen, &QPushButton::clicked, this, &CallWindow::onScreen);
+    connect(m_btnStats,  &QPushButton::clicked, this, &CallWindow::onToggleStats);
+    connect(m_btnHangup, &QPushButton::clicked, this, &CallWindow::onHangup);
+    connect(m_chkScreenAudio, &QCheckBox::toggled, this, &CallWindow::onScreenAudioChanged);
+    connect(m_cmbRes, &QComboBox::currentTextChanged, this, &CallWindow::onQualityChanged);
+    connect(m_cmbFps, &QComboBox::currentTextChanged, this, &CallWindow::onQualityChanged);
+
+    m_tickTimer = new QTimer(this);
+    m_tickTimer->setInterval(1000);
+    connect(m_tickTimer, &QTimer::timeout, this, &CallWindow::onTick);
+    m_tickTimer->start();
+
+    m_hideTimer = new QTimer(this);
+    m_hideTimer->setSingleShot(true);
+    m_hideTimer->setInterval(3000);
+    connect(m_hideTimer, &QTimer::timeout, this, &CallWindow::onHideControls);
+
+    updateButtonStates();
+}
+
+void CallWindow::startSession()
+{
+    m_session = new CallSession(m_peerIp, m_mode, m_myId, this);
+
+    connect(m_session, &CallSession::remoteFrame,  this, &CallWindow::onRemoteFrame);
+    connect(m_session, &CallSession::localFrame,   this, &CallWindow::onLocalFrame);
+    connect(m_session, &CallSession::statsUpdated, this, &CallWindow::onStats);
+    connect(m_session, &CallSession::stateChanged, this, &CallWindow::onSessionState);
+    connect(m_session, &CallSession::transportChanged, this, [this](const QString& name) {
+        if (m_transportBadge) m_transportBadge->setText(name);
     });
-    connect(socket, &QTcpSocket::errorOccurred, this, [finish](QAbstractSocket::SocketError) mutable {
-        finish(-1);
+    connect(m_session, &CallSession::failed, this, [this](const QString& reason) {
+        if (m_statusLabel) {
+            m_statusLabel->setVisible(true);
+            m_statusLabel->setText(reason);
+        }
     });
-    QTimer::singleShot(900, this, [finish]() mutable { finish(-1); });
-    socket->connectToHost(m_peerIp, MediaSettings::SignalingPort);
+
+    if (!m_session->start()) {
+        if (m_statusLabel)
+            m_statusLabel->setText(tr("Could not open your microphone or camera."));
+        return;
+    }
+
+    m_session->setScreenAudioEnabled(m_chkScreenAudio->isChecked());
+    if (m_mode != CallMode::Voice) onQualityChanged();
 }
 
-void CallWindow::onMediaConnected()
+void CallWindow::updateButtonStates()
 {
-    m_overlayLabel->setVisible(false);
-    m_statusLabel->setText("● LAN media connected");
-    m_statusLabel->setStyleSheet("color:#A6E3A1;font-size:13px;");
-}
+    const bool videoCall = (m_mode != CallMode::Voice);
 
-void CallWindow::onRemoteFrame(QImage frame)
-{
-    if (!m_remoteVideo || frame.isNull()) return;
-    m_overlayLabel->setVisible(false);
-    m_remoteVideo->setPixmap(
-        QPixmap::fromImage(frame).scaled(m_remoteVideo->size(),
-                                          Qt::KeepAspectRatio, Qt::SmoothTransformation));
-}
+    m_btnMute->setChecked(m_muted);
+    m_btnMute->setToolTip(m_muted ? tr("Unmute microphone") : tr("Mute microphone"));
 
-void CallWindow::onLocalFrame(QImage frame)
-{
-    if (!m_localVideo || frame.isNull()) return;
-    m_localVideo->setPixmap(
-        QPixmap::fromImage(frame).scaled(m_localVideo->size(),
-                                          Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    m_btnCamera->setEnabled(videoCall);
+    // Checked reads as "off" for mute and camera, which the theme paints red.
+    m_btnCamera->setChecked(videoCall && !m_cameraOn);
+    m_btnCamera->setToolTip(m_cameraOn ? tr("Turn camera off") : tr("Turn camera on"));
+
+    m_btnScreen->setEnabled(videoCall);
+    m_btnScreen->setChecked(m_screenOn);
+    m_btnScreen->setToolTip(m_screenOn ? tr("Stop sharing your screen")
+                                       : tr("Share your screen"));
+
+    m_chkScreenAudio->setVisible(m_screenOn);
+    if (m_selfView) m_selfView->setVisible(videoCall && (m_cameraOn || m_screenOn));
 }
 
 void CallWindow::onMute()
 {
     m_muted = !m_muted;
-#ifdef HAS_WEBRTC
-    if (m_pipeline) m_pipeline->setMuted(m_muted);
-#endif
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
-    if (m_audioSender) m_audioSender->muted = m_muted;
-#endif
-    m_btnMute->setText(m_muted ? "Unmute" : "Mute");
-    applyIcon(m_btnMute, m_muted ? "stop" : "voice", 18);
+    if (m_session) m_session->setMuted(m_muted);
+    updateButtonStates();
 }
 
 void CallWindow::onCamera()
 {
+    if (m_mode == CallMode::Voice) return;
     m_cameraOn = !m_cameraOn;
-    m_btnCamera->setText(m_cameraOn ? "Camera" : "Cam off");
-    applyIcon(m_btnCamera, "video", 18);
-#ifdef HAS_WEBRTC
-    if (m_pipeline) m_pipeline->setCameraEnabled(m_cameraOn);
-#endif
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
-    if (m_videoSender) { m_videoSender->stop(); if (m_cameraOn) m_videoSender->start(); }
-#endif
+    if (m_session) m_session->setCameraEnabled(m_cameraOn);
+    if (!m_cameraOn && m_selfView) m_selfView->clearFrame();
+    updateButtonStates();
 }
 
 void CallWindow::onScreen()
 {
+    if (m_mode == CallMode::Voice) return;
     m_screenOn = !m_screenOn;
-    m_btnScreen->setText(m_screenOn ? "Stop" : "Screen");
-    applyIcon(m_btnScreen, m_screenOn ? "stop" : "screen", 18);
-    m_screenAudioPanel->setVisible(m_screenOn);
-
-#ifdef HAS_WEBRTC
-    if (m_pipeline) {
-        m_pipeline->setScreenSharing(m_screenOn);
-        m_pipeline->setScreenAudioEnabled(!m_screenOn || (m_chkScreenAudio && m_chkScreenAudio->isChecked()));
-    }
-#endif
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
-    if (m_videoSender) {
-        m_videoSender->stop();
-        m_workers.removeOne(m_videoSender);
-        delete m_videoSender;
-        auto vMode = m_screenOn ? MediaMode::Screen : MediaMode::Camera;
-        m_videoSender = new MediaWorker(vMode, m_peerIp,
-                                         MediaSettings::MediaVideoPort, false, this);
-        m_workers << m_videoSender;
-        m_videoSender->start();
-    }
-    if (m_audioSender)
-        m_audioSender->muteAudioOnScreen = m_screenOn && !m_chkScreenAudio->isChecked();
-#endif
+    if (m_session) m_session->setScreenSharing(m_screenOn);
+    if (m_selfView) m_selfView->clearFrame();
+    updateButtonStates();
 }
 
-void CallWindow::onScreenAudioChanged(int)
+void CallWindow::onToggleStats()
 {
-#ifdef HAS_WEBRTC
-    if (m_pipeline)
-        m_pipeline->setScreenAudioEnabled(!m_screenOn || (m_chkScreenAudio && m_chkScreenAudio->isChecked()));
-#endif
-#if defined(HAS_MULTIMEDIA) || defined(HAS_OPENCV)
-    if (m_audioSender)
-        m_audioSender->muteAudioOnScreen = m_screenOn && !m_chkScreenAudio->isChecked();
-#endif
+    if (m_statsOverlay) m_statsOverlay->setVisible(m_btnStats->isChecked());
 }
 
-void CallWindow::onHangup() { emit hangupRequested(); doClose(); }
+void CallWindow::onScreenAudioChanged(bool on)
+{
+    if (m_session) m_session->setScreenAudioEnabled(on);
+}
+
+void CallWindow::onQualityChanged()
+{
+    if (!m_session || m_mode == CallMode::Voice) return;
+
+    // "Source" has no fixed size, so it maps to 720p — the encoder needs
+    // concrete dimensions and the camera's native size is not known up front.
+    QSize size(1280, 720);
+    const auto it = MediaSettings::Resolutions.find(m_cmbRes->currentText().toStdString());
+    if (it != MediaSettings::Resolutions.end() && it->second.has_value())
+        size = QSize(it->second->w, it->second->h);
+
+    float fps = m_cmbFps->currentText().toFloat();
+    if (fps <= 0.0f) fps = 30.0f;
+
+    m_session->setVideoTarget(size, fps, bitrateFor(size, fps));
+}
+
+void CallWindow::onSessionState(CallSession::State state)
+{
+    if (!m_statusLabel) return;
+    switch (state) {
+    case CallSession::State::Idle:
+    case CallSession::State::Connecting:
+        m_statusLabel->setVisible(true);
+        m_statusLabel->setText(tr("Connecting…"));
+        break;
+    case CallSession::State::Connected:
+        m_statusLabel->setVisible(false);
+        m_statusLabel->setText(QString());
+        break;
+    case CallSession::State::Reconnecting:
+        m_statusLabel->setVisible(true);
+        m_statusLabel->setText(tr("Reconnecting…"));
+        break;
+    case CallSession::State::Ended:
+        m_statusLabel->setVisible(true);
+        m_statusLabel->setText(tr("Call ended"));
+        break;
+    }
+}
+
+void CallWindow::onStats(CallStats stats)
+{
+    if (!m_statsOverlay || !m_statsOverlay->isVisible()) return;
+
+    const QString rtt = stats.rttMs >= 0 ? QString::number(stats.rttMs) + QStringLiteral(" ms")
+                                         : QStringLiteral("—");
+    const QString res = stats.videoWidth > 0
+                            ? QStringLiteral("%1x%2").arg(stats.videoWidth).arg(stats.videoHeight)
+                            : QStringLiteral("—");
+
+    m_statsOverlay->setText(
+        tr("transport  %1\n"
+           "rtt        %2\n"
+           "up / down  %3 / %4 kbit/s\n"
+           "loss       %5 %\n"
+           "jitter     %6 ms\n"
+           "video in   %7 @ %8 fps\n"
+           "codecs     %9 / %10\n"
+           "dropped    %11")
+            .arg(stats.transport, rtt)
+            .arg(stats.kbpsUp).arg(stats.kbpsDown)
+            .arg(stats.lossPercent).arg(stats.jitterMs)
+            .arg(res).arg(stats.fpsIn)
+            .arg(stats.audioCodec, stats.videoCodec)
+            .arg(stats.droppedFrames));
+    m_statsOverlay->adjustSize();
+    layoutSelfView();
+}
+
+void CallWindow::onRemoteFrame(QImage frame)
+{
+    if (m_remoteView) m_remoteView->setFrame(frame);
+}
+
+void CallWindow::onLocalFrame(QImage frame)
+{
+    if (m_selfView && m_selfView->isVisible()) m_selfView->setFrame(frame);
+}
+
+void CallWindow::onTick()
+{
+    if (!m_timerLabel || !m_session) return;
+    if (m_session->state() == CallSession::State::Connected ||
+        m_session->state() == CallSession::State::Reconnecting) {
+        m_timerLabel->setText(formatDuration(m_session->elapsedMs()));
+    }
+}
+
+// ── Layout / chrome ──────────────────────────────────────────────────────────
+
+void CallWindow::layoutSelfView()
+{
+    if (!m_remoteView) return;
+    const QRect stage = m_remoteView->rect();
+
+    if (m_selfView) {
+        const int w = qBound(140, stage.width() / 5, 320);
+        const int h = w * 9 / 16;
+        m_selfView->setGeometry(stage.right() - w - 16, stage.bottom() - h - 16, w, h);
+        m_selfView->raise();
+    }
+    if (m_statsOverlay) {
+        m_statsOverlay->move(16, 16);
+        m_statsOverlay->raise();
+    }
+    if (m_statusLabel) {
+        m_statusLabel->setGeometry(0, qMax(0, stage.height() - 40), stage.width(), 24);
+        m_statusLabel->raise();
+    }
+}
+
+void CallWindow::resizeEvent(QResizeEvent* e)
+{
+    QDialog::resizeEvent(e);
+    // The stage is resized by the layout after this returns, so lay the
+    // overlays out again on the next event-loop pass.
+    layoutSelfView();
+    QTimer::singleShot(0, this, [this] { layoutSelfView(); });
+}
+
+void CallWindow::setFullScreenMode(bool on)
+{
+    if (m_fullScreen == on) return;
+    m_fullScreen = on;
+
+    if (on) {
+        showFullScreen();
+        m_hideTimer->start();
+    } else {
+        showNormal();
+        m_hideTimer->stop();
+        showControls();
+    }
+}
+
+void CallWindow::showControls()
+{
+    if (m_header)   m_header->setVisible(true);
+    if (m_controls) m_controls->setVisible(true);
+    unsetCursor();
+}
+
+void CallWindow::onHideControls()
+{
+    if (!m_fullScreen) return;
+    if (m_header)   m_header->setVisible(false);
+    if (m_controls) m_controls->setVisible(false);
+    setCursor(Qt::BlankCursor);
+}
+
+void CallWindow::mouseMoveEvent(QMouseEvent* e)
+{
+    if (m_fullScreen) {
+        showControls();
+        m_hideTimer->start();
+    }
+    QDialog::mouseMoveEvent(e);
+}
+
+void CallWindow::keyPressEvent(QKeyEvent* e)
+{
+    if (e->key() == Qt::Key_Escape && m_fullScreen) {
+        setFullScreenMode(false);
+        return;
+    }
+    if (e->key() == Qt::Key_F11) {
+        setFullScreenMode(!m_fullScreen);
+        return;
+    }
+    if (e->key() == Qt::Key_M) {
+        onMute();
+        return;
+    }
+    QDialog::keyPressEvent(e);
+}
+
+// ── Lifecycle ────────────────────────────────────────────────────────────────
+
+void CallWindow::handleRtcSignal(const SigMsg& msg)
+{
+    // LAN calls negotiate over LCM3 Hello packets rather than ICE, so there is
+    // nothing to do here. The hook stays so signalling remains compatible with
+    // peers that still send WebRTC offers.
+    Q_UNUSED(msg);
+}
+
+void CallWindow::onHangup()
+{
+    if (m_closing) return;
+    m_closing = true;
+    if (m_session) m_session->stop();
+    emit hangupRequested();
+    close();
+}
 
 void CallWindow::doClose()
 {
     if (m_closing) return;
     m_closing = true;
-    stopMedia();
-    QTimer::singleShot(0, this, &QDialog::close);
+    if (m_session) m_session->stop();
+    close();
 }
 
 void CallWindow::closeEvent(QCloseEvent* e)
 {
-    if (!m_closing) emit hangupRequested();
-    stopMedia();
+    if (!m_closing) {
+        m_closing = true;
+        if (m_session) m_session->stop();
+        emit hangupRequested();
+    }
+    if (m_tickTimer) m_tickTimer->stop();
+    if (m_hideTimer) m_hideTimer->stop();
     e->accept();
+    deleteLater();
 }

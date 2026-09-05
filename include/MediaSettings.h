@@ -10,14 +10,24 @@ namespace MediaSettings {
     // Network ports
     constexpr int BroadcastPort      = 50005;
     constexpr int SignalingPort      = 50010;
-    constexpr int MediaAudioPort     = 50100;
-    constexpr int MediaVideoPort     = 50105;
-    constexpr int MediaTcpPort       = 50120;   // fallback/default media stream over TCP
+    constexpr int MediaUdpPort       = 50100;   // default media path: audio+video+control
+    constexpr int MediaTcpPort       = 50120;   // fallback when UDP is blocked
     constexpr int GroupCallPort      = 50200;
 
     // Timing
     constexpr int BroadcastIntervalMs = 1000;
     constexpr int PeerTimeoutSeconds  = 8;
+
+    // Media tuning
+    constexpr int  UdpProbeTimeoutMs  = 1500;   // no Hello back within this -> fall back to TCP
+    constexpr int  HelloIntervalMs    = 250;    // Hello repeat rate while probing
+    constexpr int  JitterTargetMs     = 60;     // nominal playout delay
+    constexpr int  JitterMaxMs        = 240;    // hard cap before frames are discarded
+    constexpr int  MaxTcpQueueBytes   = 256 * 1024;  // video backpressure threshold
+    constexpr int  OpusFrameMs        = 20;
+    constexpr int  OpusSampleRate     = 48000;
+    constexpr int  OpusBitrate        = 32000;
+    constexpr int  KeyframeRequestCooldownMs = 1000;
 
     // Limits
     constexpr int  BufferSize      = 65536;
